@@ -1,0 +1,13 @@
+# Ignore all data files - users should add their own datasets
+*
+!.gitignore
+
+# Common data file patterns
+*.csv
+*.xlsx
+*.json
+*.parquet
+*.h5
+*.hdf5
+*.pkl
+*.pickle

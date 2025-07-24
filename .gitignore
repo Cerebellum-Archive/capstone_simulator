@@ -141,4 +141,5 @@ Thumbs.db
 
 # Project specific
 reports/
-cache/ 
+cache/
+archive_old_structure/ 
