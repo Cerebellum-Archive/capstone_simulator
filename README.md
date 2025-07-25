@@ -180,6 +180,7 @@ Based on historical backtests using Blue Water Macro's methodology (2015-2024):
 - **QuantNet Forums**: [quantnet.com](https://quantnet.com) - Premier quantitative finance community
 - **CFA Institute**: [cfainstitute.org](https://cfainstitute.org) - Professional certification and readings
 - **xarray Documentation**: [xarray.pydata.org](https://xarray.pydata.org/en/stable/examples/finance.html) - Financial data handling
+- **Risk Models**: [riskmodels.net](https://riskmodels.net) - Institutional beta factors, grade gross and residual returns
 
 ### Professional Development
 - **Blue Water Macro**: Enterprise-grade data and analytics for institutional research
