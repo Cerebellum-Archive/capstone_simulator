@@ -38,14 +38,19 @@ By completing this tutorial, you will:
 1. **Master Time-Series Analysis**: Understand walk-forward backtesting and avoid look-ahead bias
 2. **Apply Machine Learning to Finance**: Use sklearn pipelines for feature engineering and model selection
 3. **Handle Multi-Dimensional Data**: Leverage xarray for professional-grade data analysis
-4. **Build Portfolio Strategies**: Implement position sizing and risk management techniques
-5. **Generate Professional Reports**: Create publication-quality analysis and visualizations
+4. **Implement Professional Benchmarking**: Compare strategies using information ratios and excess returns
+5. **Build Portfolio Strategies**: Implement position sizing and risk management techniques
+6. **Generate Professional Reports**: Create publication-quality PDF tear sheets and performance analysis
+7. **Configure Advanced Simulations**: Master parameter management and extended data coverage (15+ years)
 
 ### Why Blue Water Macro?
 
 Blue Water Macro Corp. brings institutional-grade methodologies to educational settings. Our framework incorporates:
 
 - **Enterprise-Grade Analytics**: Tools used by professional quantitative researchers
+- **Professional Benchmarking**: Institutional-standard performance attribution and comparison
+- **Extended Data Coverage**: 15+ years of historical data for robust backtesting (2010-present)
+- **Publication-Quality Output**: PDF tear sheets and professional visualization
 - **Real-World Applications**: Strategies applicable to actual trading environments
 - **Educational Focus**: Step-by-step guidance designed for learning
 - **Career Development**: Direct pathway to quantitative finance careers

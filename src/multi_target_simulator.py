@@ -42,7 +42,7 @@ from IPython.display import display
 import pickle
 import hashlib
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Dict
 from dataclasses import dataclass
 import logging
 
@@ -52,6 +52,14 @@ logger = logging.getLogger(__name__)
 
 # Constants
 TRADING_DAYS_PER_YEAR = 252
+
+def format_benchmark_name(benchmark_col: str) -> str:
+    """Format benchmark column name for display with abbreviations."""
+    name = benchmark_col.replace('benchmark_', '').replace('_', ' ').title()
+    # Apply abbreviations
+    if name == 'Equal Weight Targets':
+        return 'EQ Weight'
+    return name
 QUARTERLY_WINDOW_DAYS = 63
 MONTHLY_RETRAIN_DAYS = 21
 WEEKLY_RETRAIN_DAYS = 5
@@ -66,7 +74,7 @@ class SimulationConfig:
     train_frequency: str = 'monthly'
     window_size: int = 400
     window_type: str = 'expanding'
-    start_date: str = '2015-01-01'
+    start_date: str = '2010-01-01'
     use_cache: bool = True
     force_retrain: bool = False
     csv_output_dir: str = '/Volumes/ext_2t/ERM3_Data/stock_data/csv'
@@ -76,6 +84,21 @@ class SimulationConfig:
             raise ValueError(f"Invalid train_frequency: {self.train_frequency}")
         if self.window_type not in ['expanding', 'rolling']:
             raise ValueError(f"Invalid window_type: {self.window_type}")
+
+@dataclass
+class BenchmarkConfig:
+    """Configuration for benchmark calculations."""
+    include_transaction_costs: bool = True
+    rebalancing_frequency: str = 'monthly'  # 'daily', 'weekly', 'monthly'
+    benchmark_types: List[str] = None
+    volatility_window: int = 63  # Days for volatility calculation
+    
+    def __post_init__(self):
+        if self.benchmark_types is None:
+            # Don't filter benchmarks by default - let strategy type determine appropriate ones
+            self.benchmark_types = None
+        if self.rebalancing_frequency not in ['daily', 'weekly', 'monthly']:
+            raise ValueError(f"Invalid rebalancing_frequency: {self.rebalancing_frequency}")
 
 # Scikit-learn and statsmodels
 from sklearn.pipeline import Pipeline
@@ -92,12 +115,6 @@ from utils_simulate import (
     create_results_xarray, plot_xarray_results, calculate_performance_metrics
 )
 
-# Automated performance analytics
-try:
-    import quantstats as qs
-except ImportError:
-    print("quantstats not found. Please install it: pip install quantstats")
-    qs = None
 
 
 # --- Caching and Performance Utilities ---
@@ -192,6 +209,244 @@ def generate_train_predict_calendar_with_frequency(X, train_frequency, window_ty
     
     return date_ranges
 
+
+# --- Benchmarking Framework ---
+
+class BenchmarkCalculator(ABC):
+    """Abstract base class for benchmark calculations."""
+    
+    def __init__(self, config: BenchmarkConfig = None):
+        self.config = config or BenchmarkConfig()
+    
+    @abstractmethod
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        """Calculate benchmark returns for given dates."""
+        pass
+    
+    @abstractmethod
+    def get_description(self) -> str:
+        """Return description of this benchmark."""
+        pass
+    
+    def get_name(self) -> str:
+        """Return short name for this benchmark."""
+        return self.__class__.__name__.replace('Benchmark', '').lower()
+
+class EqualWeightBenchmark(BenchmarkCalculator):
+    """Equal-weight benchmark of specified ETFs."""
+    
+    def __init__(self, etfs: List[str], config: BenchmarkConfig = None):
+        super().__init__(config)
+        self.etfs = etfs
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if not self.etfs or not any(etf in data.columns for etf in self.etfs):
+            logger.warning(f"ETFs {self.etfs} not found in data columns")
+            return pd.Series(0.0, index=dates)
+        
+        # Filter to available ETFs
+        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        
+        equal_weights = 1.0 / len(available_etfs)
+        weighted_returns = data[available_etfs].mul(equal_weights, axis=1).sum(axis=1)
+        return weighted_returns.reindex(dates).fillna(0)
+    
+    def get_description(self) -> str:
+        return f"Equal-weight portfolio of {len(self.etfs)} ETFs: {', '.join(self.etfs)}"
+
+class SingleETFBenchmark(BenchmarkCalculator):
+    """Single ETF buy-and-hold benchmark."""
+    
+    def __init__(self, etf_symbol: str, config: BenchmarkConfig = None):
+        super().__init__(config)
+        self.etf_symbol = etf_symbol
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if self.etf_symbol not in data.columns:
+            logger.warning(f"ETF {self.etf_symbol} not found in data, using zeros")
+            return pd.Series(0.0, index=dates)
+        
+        return data[self.etf_symbol].reindex(dates).fillna(0)
+    
+    def get_description(self) -> str:
+        return f"Buy-and-hold {self.etf_symbol}"
+
+class RiskParityBenchmark(BenchmarkCalculator):
+    """Risk parity weighted benchmark (inverse volatility weighting)."""
+    
+    def __init__(self, etfs: List[str], config: BenchmarkConfig = None):
+        super().__init__(config)
+        self.etfs = etfs
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if not self.etfs or not any(etf in data.columns for etf in self.etfs):
+            logger.warning(f"ETFs {self.etfs} not found in data columns")
+            return pd.Series(0.0, index=dates)
+        
+        # Filter to available ETFs
+        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        etf_data = data[available_etfs]
+        
+        # Calculate rolling volatilities
+        volatilities = etf_data.rolling(window=self.config.volatility_window).std()
+        
+        # Inverse volatility weights (higher vol gets lower weight)
+        inv_vol_weights = (1 / volatilities).div((1 / volatilities).sum(axis=1), axis=0)
+        
+        # Calculate weighted returns (use lagged weights to avoid lookahead bias)
+        weighted_returns = (etf_data * inv_vol_weights.shift(1)).sum(axis=1)
+        
+        return weighted_returns.reindex(dates).fillna(0)
+    
+    def get_description(self) -> str:
+        return f"Risk parity portfolio of {len(self.etfs)} ETFs (inverse volatility weighted)"
+
+class LongShortRandomBenchmark(BenchmarkCalculator):
+    """Random long-short benchmark for comparison with long-short strategies."""
+    
+    def __init__(self, etfs: List[str], n_long: int = 1, n_short: int = 1, 
+                 leverage: float = 1.0, config: BenchmarkConfig = None):
+        super().__init__(config)
+        self.etfs = etfs
+        self.n_long = n_long
+        self.n_short = n_short
+        self.leverage = leverage
+        self.random_seed = 42  # For reproducibility
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if not self.etfs or not any(etf in data.columns for etf in self.etfs):
+            logger.warning(f"ETFs {self.etfs} not found in data columns")
+            return pd.Series(0.0, index=dates)
+        
+        # Filter to available ETFs
+        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        
+        np.random.seed(self.random_seed)
+        returns = []
+        
+        # Determine rebalancing frequency
+        rebal_freq = {'daily': 1, 'weekly': 5, 'monthly': 21}[self.config.rebalancing_frequency]
+        
+        current_long_etfs = None
+        current_short_etfs = None
+        
+        for i, date in enumerate(dates):
+            if date in data.index:
+                # Rebalance periodically
+                if i % rebal_freq == 0 or current_long_etfs is None:
+                    # Randomly select long and short positions
+                    shuffled_etfs = available_etfs.copy()
+                    np.random.shuffle(shuffled_etfs)
+                    
+                    current_long_etfs = shuffled_etfs[:self.n_long]
+                    current_short_etfs = shuffled_etfs[-self.n_short:]
+                
+                # Calculate position weights
+                long_weight = self.leverage / (2 * self.n_long) if self.n_long > 0 else 0
+                short_weight = -self.leverage / (2 * self.n_short) if self.n_short > 0 else 0
+                
+                # Calculate daily return
+                day_return = 0.0
+                if current_long_etfs:
+                    day_return += data.loc[date, current_long_etfs].sum() * long_weight
+                if current_short_etfs:
+                    day_return += data.loc[date, current_short_etfs].sum() * short_weight
+                
+                returns.append(day_return)
+            else:
+                returns.append(0.0)
+        
+        return pd.Series(returns, index=dates)
+    
+    def get_description(self) -> str:
+        return f"Random long-short ({self.n_long}L/{self.n_short}S, {self.leverage:.1f}x leverage)"
+
+class ZeroReturnBenchmark(BenchmarkCalculator):
+    """Zero return benchmark for dollar-neutral strategies."""
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        return pd.Series(0.0, index=dates)
+    
+    def get_description(self) -> str:
+        return "Zero return (cash equivalent)"
+
+class BenchmarkManager:
+    """Manages benchmark selection and calculation for different strategy types."""
+    
+    def __init__(self, strategy_type: str, target_etfs: List[str], 
+                 feature_etfs: List[str] = None, config: BenchmarkConfig = None):
+        self.strategy_type = strategy_type
+        self.target_etfs = target_etfs
+        self.feature_etfs = feature_etfs or []
+        self.all_etfs = target_etfs + self.feature_etfs
+        self.config = config or BenchmarkConfig()
+        self.benchmarks = self._create_benchmarks()
+    
+    def _create_benchmarks(self) -> Dict[str, BenchmarkCalculator]:
+        """Create appropriate benchmarks based on strategy type."""
+        benchmarks = {}
+        
+        # Common benchmarks for all strategy types
+        benchmarks['equal_weight_targets'] = EqualWeightBenchmark(self.target_etfs, self.config)
+        benchmarks['spy_only'] = SingleETFBenchmark('SPY', self.config)
+        
+        if self.strategy_type == 'equal_weight':
+            benchmarks['equal_weight_all'] = EqualWeightBenchmark(self.all_etfs, self.config)
+            benchmarks['vti_market'] = SingleETFBenchmark('VTI', self.config)
+            
+        elif self.strategy_type == 'confidence_weighted':
+            benchmarks['risk_parity'] = RiskParityBenchmark(self.target_etfs, self.config)
+            if self.all_etfs:
+                benchmarks['risk_parity_all'] = RiskParityBenchmark(self.all_etfs, self.config)
+            
+        elif self.strategy_type == 'long_short':
+            benchmarks['zero_return'] = ZeroReturnBenchmark(self.config)
+            benchmarks['random_long_short'] = LongShortRandomBenchmark(
+                self.target_etfs, n_long=1, n_short=1, leverage=1.0, config=self.config
+            )
+            if len(self.target_etfs) >= 2:
+                benchmarks['random_long_short_2v2'] = LongShortRandomBenchmark(
+                    self.target_etfs, n_long=2, n_short=2, leverage=1.0, config=self.config
+                )
+        
+        # Filter benchmarks based on config (only if explicitly set)
+        if self.config.benchmark_types is not None:
+            benchmarks = {k: v for k, v in benchmarks.items() 
+                         if k in self.config.benchmark_types}
+        
+        return benchmarks
+    
+    def calculate_all_benchmarks(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+        """Calculate returns for all benchmarks."""
+        benchmark_returns = {}
+        
+        for name, calculator in self.benchmarks.items():
+            try:
+                returns = calculator.calculate_returns(data, dates)
+                benchmark_returns[f'benchmark_{name}'] = returns
+                logger.info(f"Calculated benchmark: {name} - {calculator.get_description()}")
+            except Exception as e:
+                logger.error(f"Failed to calculate benchmark {name}: {str(e)}")
+                benchmark_returns[f'benchmark_{name}'] = pd.Series(0.0, index=dates)
+        
+        return pd.DataFrame(benchmark_returns, index=dates)
+    
+    def get_benchmark_descriptions(self) -> Dict[str, str]:
+        """Get descriptions of all benchmarks."""
+        return {name: calc.get_description() for name, calc in self.benchmarks.items()}
+
+def _determine_strategy_type(position_func) -> str:
+    """Determine strategy type from position function."""
+    if position_func is None:
+        return 'equal_weight'
+    
+    func_name = position_func.__name__
+    if 'long_short' in func_name:
+        return 'long_short'
+    elif 'confidence' in func_name:
+        return 'confidence_weighted'
+    else:
+        return 'equal_weight'
 
 # --- Position Sizing Strategy Pattern ---
 
@@ -671,56 +926,125 @@ def plot_portfolio_summary(regout_list, sweep_tags, target_etfs, config):
     plt.close()
 
 
+def calculate_performance_metrics(returns: pd.Series) -> Dict[str, float]:
+    """Calculate comprehensive performance metrics for a return series."""
+    if returns.empty or returns.isna().all():
+        return {'annual_return': 0, 'annual_vol': 0, 'sharpe_ratio': 0, 'max_drawdown': 0}
+    
+    annual_return = returns.mean() * TRADING_DAYS_PER_YEAR
+    annual_vol = returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    sharpe_ratio = annual_return / annual_vol if annual_vol != 0 else 0
+    
+    # Calculate maximum drawdown
+    cumulative_returns = returns.cumsum()
+    running_max = cumulative_returns.expanding().max()
+    drawdown = cumulative_returns - running_max
+    max_drawdown = drawdown.min()
+    
+    return {
+        'annual_return': annual_return,
+        'annual_vol': annual_vol,
+        'sharpe_ratio': sharpe_ratio,
+        'max_drawdown': max_drawdown
+    }
+
+def calculate_information_ratio(strategy_returns: pd.Series, benchmark_returns: pd.Series) -> float:
+    """Calculate information ratio (excess return / tracking error)."""
+    if strategy_returns.empty or benchmark_returns.empty:
+        return 0.0
+    
+    # Align series
+    aligned_strategy, aligned_benchmark = strategy_returns.align(benchmark_returns, join='inner')
+    
+    if aligned_strategy.empty:
+        return 0.0
+    
+    excess_returns = aligned_strategy - aligned_benchmark
+    excess_mean = excess_returns.mean() * TRADING_DAYS_PER_YEAR
+    tracking_error = excess_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    
+    return excess_mean / tracking_error if tracking_error != 0 else 0.0
+
+def create_benchmark_comparison_table(regout_df: pd.DataFrame, strategy_name: str) -> pd.DataFrame:
+    """Create comprehensive benchmark comparison table for a single strategy."""
+    benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
+    
+    if not benchmark_cols:
+        logger.warning(f"No benchmark columns found for strategy {strategy_name}")
+        return pd.DataFrame()
+    
+    results = []
+    strategy_returns = regout_df['portfolio_ret']
+    
+    for benchmark_col in benchmark_cols:
+        benchmark_returns = regout_df[benchmark_col]
+        benchmark_name = format_benchmark_name(benchmark_col)
+        
+        # Calculate metrics
+        strategy_metrics = calculate_performance_metrics(strategy_returns)
+        benchmark_metrics = calculate_performance_metrics(benchmark_returns)
+        info_ratio = calculate_information_ratio(strategy_returns, benchmark_returns)
+        
+        results.append({
+            'Benchmark': benchmark_name,
+            'Strategy_Return': strategy_metrics['annual_return'],
+            'Strategy_Sharpe': strategy_metrics['sharpe_ratio'],
+            'Strategy_MaxDD': strategy_metrics['max_drawdown'],
+            'Benchmark_Return': benchmark_metrics['annual_return'],
+            'Benchmark_Sharpe': benchmark_metrics['sharpe_ratio'],
+            'Benchmark_MaxDD': benchmark_metrics['max_drawdown'],
+            'Excess_Return': strategy_metrics['annual_return'] - benchmark_metrics['annual_return'],
+            'Sharpe_Diff': strategy_metrics['sharpe_ratio'] - benchmark_metrics['sharpe_ratio'],
+            'Information_Ratio': info_ratio
+        })
+    
+    return pd.DataFrame(results)
+
 def create_performance_summary_table(regout_list, sweep_tags, target_etfs):
     """
-    Creates a detailed performance summary table for each target and strategy.
+    Creates enhanced performance summary table with multiple benchmark comparisons.
     """
     summary_data = []
     
-    for i, (regout_df, tag) in enumerate(zip(regout_list, sweep_tags)):
-        for target in target_etfs:
-            if f'actual_{target}' in regout_df.columns:
-                # Strategy metrics
-                strategy_ret = regout_df['leverage'] * regout_df[f'actual_{target}']
-                buy_hold_ret = regout_df[f'actual_{target}']
-                
-                # Calculate metrics
-                strategy_annual_ret = strategy_ret.mean() * TRADING_DAYS_PER_YEAR
-                strategy_annual_vol = strategy_ret.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
-                strategy_sharpe = strategy_annual_ret / strategy_annual_vol if strategy_annual_vol != 0 else np.nan
-                
-                buy_hold_annual_ret = buy_hold_ret.mean() * TRADING_DAYS_PER_YEAR
-                buy_hold_annual_vol = buy_hold_ret.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
-                buy_hold_sharpe = buy_hold_annual_ret / buy_hold_annual_vol if buy_hold_annual_vol != 0 else np.nan
-                
-                # Maximum drawdown
-                strategy_cum = strategy_ret.cumsum()
-                strategy_dd = (strategy_cum - strategy_cum.expanding().max()).min()
-                
-                buy_hold_cum = buy_hold_ret.cumsum()
-                buy_hold_dd = (buy_hold_cum - buy_hold_cum.expanding().max()).min()
-                
-                summary_data.append({
-                    'Strategy': tag,
-                    'Target': target,
-                    'Strategy_Annual_Return': strategy_annual_ret,
-                    'Strategy_Annual_Vol': strategy_annual_vol,
-                    'Strategy_Sharpe': strategy_sharpe,
-                    'Strategy_Max_DD': strategy_dd,
-                    'BuyHold_Annual_Return': buy_hold_annual_ret,
-                    'BuyHold_Annual_Vol': buy_hold_annual_vol,
-                    'BuyHold_Sharpe': buy_hold_sharpe,
-                    'BuyHold_Max_DD': buy_hold_dd,
-                    'Excess_Return': strategy_annual_ret - buy_hold_annual_ret,
-                    'Sharpe_Improvement': strategy_sharpe - buy_hold_sharpe
-                })
+    for regout_df, tag in zip(regout_list, sweep_tags):
+        # Portfolio-level analysis
+        portfolio_returns = regout_df['portfolio_ret']
+        portfolio_metrics = calculate_performance_metrics(portfolio_returns)
+        
+        # Get benchmark comparison data
+        benchmark_comparison = create_benchmark_comparison_table(regout_df, tag)
+        
+        # Add portfolio summary
+        base_summary = {
+            'Strategy': tag,
+            'Portfolio_Annual_Return': portfolio_metrics['annual_return'],
+            'Portfolio_Sharpe': portfolio_metrics['sharpe_ratio'],
+            'Portfolio_MaxDD': portfolio_metrics['max_drawdown'],
+            'Portfolio_Vol': portfolio_metrics['annual_vol']
+        }
+        
+        # Add best benchmark comparison
+        if not benchmark_comparison.empty:
+            # Find benchmark with highest Sharpe ratio for comparison
+            best_benchmark_idx = benchmark_comparison['Benchmark_Sharpe'].idxmax()
+            best_benchmark = benchmark_comparison.loc[best_benchmark_idx]
+            
+            base_summary.update({
+                'Best_Benchmark': best_benchmark['Benchmark'],
+                'Best_Benchmark_Return': best_benchmark['Benchmark_Return'],
+                'Best_Benchmark_Sharpe': best_benchmark['Benchmark_Sharpe'],
+                'Excess_vs_Best': best_benchmark['Excess_Return'],
+                'Info_Ratio_vs_Best': best_benchmark['Information_Ratio']
+            })
+        
+        summary_data.append(base_summary)
     
     summary_df = pd.DataFrame(summary_data)
     
     # Save to CSV
     os.makedirs('reports', exist_ok=True)
-    summary_df.to_csv('reports/individual_target_performance_summary.csv', index=False)
-    print("Saved individual target performance summary: reports/individual_target_performance_summary.csv")
+    summary_df.to_csv('reports/enhanced_performance_summary.csv', index=False)
+    logger.info("Saved enhanced performance summary: reports/enhanced_performance_summary.csv")
     
     return summary_df
 
@@ -728,8 +1052,8 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
     """
     Calculates comprehensive statistics for multi-target strategies.
     """
-    df = pd.DataFrame(dtype=object)
-    df.index.name = 'metric'
+    # Build results dictionary first to avoid dtype issues
+    results_dict = {}
     
     # Handle case where trange is None
     if trange is None and regout_list:
@@ -740,7 +1064,7 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
         print('MULTI-TARGET SIMULATION RANGE:', 'from', trange.start, 'to', trange.stop)
     else:
         print('MULTI-TARGET SIMULATION RANGE: No data available')
-        return df
+        return pd.DataFrame()
 
     for n, testlabel in enumerate(sweep_tags):
         reg_out = regout_list[n].loc[trange, :]
@@ -750,10 +1074,13 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
         std_ret = (np.sqrt(TRADING_DAYS_PER_YEAR)) * reg_out.portfolio_ret.std()
         sharpe = mean_ret / std_ret if std_ret != 0 else np.nan
 
-        df.loc['portfolio_return', testlabel] = mean_ret
-        df.loc['portfolio_stdev', testlabel] = std_ret
-        df.loc['portfolio_sharpe', testlabel] = sharpe
-        df.loc['avg_leverage', testlabel] = reg_out.leverage.mean()
+        # Store results in dictionary
+        results_dict[testlabel] = {
+            'portfolio_return': mean_ret,
+            'portfolio_stdev': std_ret,
+            'portfolio_sharpe': sharpe,
+            'avg_leverage': reg_out.leverage.mean()
+        }
 
         # Multi-target prediction metrics
         prediction_cols = [col for col in reg_out.columns if col.startswith('pred_')]
@@ -775,63 +1102,64 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
                         mae_scores.append(mae(actual_data, pred_data))
                         r2_scores.append(r2_score(actual_data, pred_data))
             
-            df.loc['avg_rmse', testlabel] = np.mean(rmse_scores) if rmse_scores else np.nan
-            df.loc['avg_mae', testlabel] = np.mean(mae_scores) if mae_scores else np.nan
-            df.loc['avg_r2', testlabel] = np.mean(r2_scores) if r2_scores else np.nan
+            results_dict[testlabel].update({
+                'avg_rmse': np.mean(rmse_scores) if rmse_scores else np.nan,
+                'avg_mae': np.mean(mae_scores) if mae_scores else np.nan,
+                'avg_r2': np.mean(r2_scores) if r2_scores else np.nan
+            })
 
-        # Benchmark comparison (equal-weight portfolio of all targets)
+        # Enhanced benchmark analysis
+        benchmark_cols = [col for col in reg_out.columns if col.startswith('benchmark_')]
+        if benchmark_cols:
+            # Calculate metrics for each benchmark
+            for benchmark_col in benchmark_cols:
+                benchmark_name = benchmark_col.replace('benchmark_', '')
+                benchmark_ret = reg_out[benchmark_col]
+                
+                bench_annual_ret = TRADING_DAYS_PER_YEAR * benchmark_ret.mean()
+                bench_annual_std = (np.sqrt(TRADING_DAYS_PER_YEAR)) * benchmark_ret.std()
+                bench_sharpe = bench_annual_ret / bench_annual_std if bench_annual_std != 0 else np.nan
+                
+                # Information ratio vs this benchmark
+                info_ratio = calculate_information_ratio(reg_out.portfolio_ret, benchmark_ret)
+                
+                # Excess return vs this benchmark
+                excess_return = mean_ret - bench_annual_ret
+                
+                # Add to results dictionary
+                results_dict[testlabel].update({
+                    f'{benchmark_name}_return': bench_annual_ret,
+                    f'{benchmark_name}_std': bench_annual_std,
+                    f'{benchmark_name}_sharpe': bench_sharpe,
+                    f'info_ratio_vs_{benchmark_name}': info_ratio,
+                    f'excess_return_vs_{benchmark_name}': excess_return
+                })
+        
+        # Legacy benchmark for backward compatibility
         if 'benchmark_ret' in reg_out.columns:
             bench_ret = TRADING_DAYS_PER_YEAR * reg_out.benchmark_ret.mean()
             bench_std = (np.sqrt(TRADING_DAYS_PER_YEAR)) * reg_out.benchmark_ret.std()
-            df.loc['benchmark_return', testlabel] = bench_ret
-            df.loc['benchmark_std', testlabel] = bench_std
-            df.loc['benchmark_sharpe', testlabel] = bench_ret / bench_std if bench_std != 0 else np.nan
+            bench_sharpe = bench_ret / bench_std if bench_std != 0 else np.nan
+            
+            results_dict[testlabel].update({
+                'benchmark_return': bench_ret,
+                'benchmark_std': bench_std,
+                'benchmark_sharpe': bench_sharpe
+            })
 
-        df.loc['beg_pred', testlabel] = reg_out.index.min().date()
-        df.loc['end_pred', testlabel] = reg_out.index.max().date()
-        df.loc['author', testlabel] = author
-        df.loc['n_targets', testlabel] = len(target_etfs)
+        # Add metadata
+        results_dict[testlabel].update({
+            'beg_pred': str(reg_out.index.min().date()),
+            'end_pred': str(reg_out.index.max().date()),
+            'author': str(author),
+            'n_targets': len(target_etfs)
+        })
 
-        # QuantStats reports disabled - using tear sheet instead
-        # if qs:
-        #     os.makedirs('reports', exist_ok=True)
-        #     report_filename = f'reports/{testlabel}_multi_target_report.html'
-        #     print(f"\n--- Generating Multi-Target QuantStats report for: {testlabel} ---")
-        #     print(f"    To view, open the file: {report_filename}")
-        #     try:
-        #         returns = reg_out['portfolio_ret']
-        #         benchmark = reg_out['benchmark_ret'] if 'benchmark_ret' in reg_out.columns else None
 
-        #         # Ensure returns are properly formatted for QuantStats
-        #         if len(returns) == 0:
-        #             print(f"Skipping QuantStats report for {testlabel}: No returns data")
-        #             continue
-                
-        #         # Convert to pandas Series if needed and ensure proper index
-        #         if not isinstance(returns, pd.Series):
-        #             returns = pd.Series(returns)
-                
-        #         # Create daily date range and reindex
-        #         full_date_range = pd.date_range(start=returns.index.min(), end=returns.index.max(), freq='D')
-        #         daily_returns = returns.reindex(full_date_range).fillna(0)
-                
-        #         # Ensure we have valid data
-        #         if daily_returns.isna().all() or (daily_returns == 0).all():
-        #             print(f"Skipping QuantStats report for {testlabel}: No valid returns data")
-        #             continue
-                
-        #         if benchmark is not None:
-        #             daily_benchmark = benchmark.reindex(full_date_range).fillna(0)
-        #             qs.reports.html(daily_returns, benchmark=daily_benchmark,
-        #                                   output=report_filename, title=f'{testlabel} Multi-Target Performance')
-        #         else:
-        #             qs.reports.html(daily_returns, output=report_filename, 
-        #                                   title=f'{testlabel} Multi-Target Performance')
-        #     except Exception as e:
-        #         print(f"Could not generate QuantStats report for {testlabel}: {e}")
-        #         print(f"    Returns data shape: {returns.shape if 'returns' in locals() else 'N/A'}")
-        #         print(f"    Returns data sample: {returns.head() if 'returns' in locals() else 'N/A'}")
-
+    # Convert results dictionary to DataFrame
+    df = pd.DataFrame(results_dict)
+    df.index.name = 'metric'
+    
     return df
 
 
@@ -995,7 +1323,7 @@ def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str],
 
 def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type, 
                         pipe_steps={}, param_grid={}, tag=None, position_func=None, position_params=[], 
-                        use_cache=None):
+                        use_cache=None, benchmark_config: BenchmarkConfig = None):
     """
     Multi-target walk-forward simulation engine with caching and configurable training frequency.
     
@@ -1025,8 +1353,25 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     if use_cache:
         cached_result = load_simulation_results(simulation_hash, tag)
         if cached_result is not None:
-            print(f"Using cached results for {tag}")
+            logger.info(f"Using cached results for {tag}")
             return cached_result
+    
+    # Setup benchmarking
+    if benchmark_config is None:
+        benchmark_config = BenchmarkConfig()
+    
+    strategy_type = _determine_strategy_type(position_func)
+    
+    # We'll need the original data for benchmarking, extract ETF lists
+    target_etfs = y_multi.columns.tolist()
+    feature_etfs = [col for col in X.columns if col not in target_etfs]
+    
+    benchmark_manager = BenchmarkManager(
+        strategy_type=strategy_type,
+        target_etfs=target_etfs,
+        feature_etfs=feature_etfs,
+        config=benchmark_config
+    )
     
     # Initialize results DataFrame
     regout = pd.DataFrame(index=y_multi.index)
@@ -1101,11 +1446,31 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     # Calculate portfolio performance using new helper function
     regout = _calculate_portfolio_returns(regout, target_cols, position_func, position_params)
 
-    # Benchmark: equal-weight buy-and-hold of all targets
+    # Legacy benchmark for backward compatibility
     actual_cols = [f'actual_{target}' for target in target_cols]
     actual_returns_benchmark = regout[actual_cols].copy()
     actual_returns_benchmark.columns = target_cols
     regout['benchmark_ret'] = actual_returns_benchmark.mean(axis=1)
+    
+    # Calculate comprehensive benchmarks
+    try:
+        # Reconstruct the original returns data for benchmarking
+        all_returns_data = pd.concat([X, y_multi.shift(1)], axis=1).dropna()
+        benchmark_returns = benchmark_manager.calculate_all_benchmarks(all_returns_data, regout.index)
+        
+        # Add benchmark columns to results
+        for col in benchmark_returns.columns:
+            regout[col] = benchmark_returns[col]
+        
+        # Log benchmark descriptions
+        descriptions = benchmark_manager.get_benchmark_descriptions()
+        logger.info(f"Added {len(descriptions)} benchmarks for {strategy_type} strategy:")
+        for name, desc in descriptions.items():
+            logger.info(f"  - {name}: {desc}")
+            
+    except Exception as e:
+        logger.error(f"Failed to calculate comprehensive benchmarks: {str(e)}")
+        logger.info("Continuing with legacy benchmark only")
 
     # Remove rows with NaN values
     regout_clean = regout.dropna()
@@ -1119,7 +1484,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
 
 
 def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[str], 
-                                      start_date: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                                      start_date: str = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Downloads and prepares data for multi-target regression with error handling.
     
@@ -1195,13 +1560,13 @@ def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[st
     X = X.replace([np.inf, -np.inf], 0)
     y_multi = y_multi.replace([np.inf, -np.inf], 0)
     
-    print("Multi-target data preparation complete.")
-    print(f"    Feature shape: {X.shape}")
-    print(f"    Target shape: {y_multi.shape}")
-    print(f"    Feature range: [{X.min().min():.6f}, {X.max().max():.6f}]")
-    print(f"    Target range: [{y_multi.min().min():.6f}, {y_multi.max().max():.6f}]")
+    logger.info("Multi-target data preparation complete.")
+    logger.info(f"Feature shape: {X.shape}")
+    logger.info(f"Target shape: {y_multi.shape}")
+    logger.info(f"Feature range: [{X.min().min():.6f}, {X.max().max():.6f}]")
+    logger.info(f"Target range: [{y_multi.min().min():.6f}, {y_multi.max().max():.6f}]")
     
-    return X, y_multi
+    return X, y_multi, etf_log_returns_df
 
 
 def create_csv_metadata_file(csv_output_dir, strategy_tags, timestamp):
@@ -1464,7 +1829,7 @@ def main():
         'train_frequency': 'monthly',  # 'daily', 'weekly', 'monthly'
         'window_size': 400,  # Training window size
         'window_type': 'expanding',  # 'expanding' or 'rolling'
-        'start_date': '2015-01-01',  # Data start date
+        'start_date': '2010-01-01',  # Data start date
         'use_cache': True,
         'force_retrain': False,
         'csv_output_dir': '/Volumes/ext_2t/ERM3_Data/stock_data/csv'  # External drive CSV directory
@@ -1493,7 +1858,7 @@ def main():
     all_etfs = feature_etfs + target_etfs
     
     # Load and prepare data
-    X, y_multi = load_and_prepare_multi_target_data(
+    X, y_multi, _ = load_and_prepare_multi_target_data(
         etf_list=all_etfs, 
         target_etfs=target_etfs,
         start_date=config['start_date']
@@ -1543,6 +1908,12 @@ def main():
         print(f"--- Strategy {i+1}/{len(strategy_combinations)}: {strategy['tag']} ---")
         
         try:
+            # Create benchmark config for this strategy
+            benchmark_config = BenchmarkConfig(
+                include_transaction_costs=False,  # Start simple
+                rebalancing_frequency='monthly'
+            )
+            
             regout_df = Simulate_MultiTarget(
                 X, y_multi, config['train_frequency'],
                 window_size=config['window_size'],
@@ -1552,7 +1923,8 @@ def main():
                 tag=strategy['tag'],
                 position_func=strategy['position_func'],
                 position_params=strategy['position_params'],
-                use_cache=config['use_cache']
+                use_cache=config['use_cache'],
+                benchmark_config=benchmark_config
             )
             
             if not regout_df.empty:
@@ -1605,26 +1977,40 @@ def main():
             combined_df.to_csv(combined_csv_path)
             print(f"Combined results saved to: {combined_csv_path}")
         
-        # Create professional tear sheet using new plotting utilities
-        print("\nGenerating professional tear sheet...")
+        # Create professional tear sheet and benchmark analysis
+        logger.info("Generating professional tear sheet and benchmark analysis...")
         try:
-            from plotting_utils import create_professional_tear_sheet, create_simple_comparison_plot
+            from plotting_utils import (create_professional_tear_sheet, create_simple_comparison_plot,
+                                       plot_strategy_vs_benchmarks, create_benchmark_comparison_heatmap)
             
             # Generate professional tear sheet
             pdf_path = create_professional_tear_sheet(regout_list, sweep_tags, config)
             if pdf_path:
-                print(f"✅ Professional tear sheet created: {pdf_path}")
+                logger.info(f"✅ Professional tear sheet created: {pdf_path}")
+            
+            # Create benchmark comparison heatmap
+            heatmap_path = create_benchmark_comparison_heatmap(regout_list, sweep_tags, config)
+            if heatmap_path:
+                logger.info(f"📊 Benchmark comparison heatmap created: {heatmap_path}")
+            
+            # Create individual strategy vs benchmark plots
+            for regout_df, tag in zip(regout_list, sweep_tags):
+                benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
+                if benchmark_cols:
+                    plot_path = plot_strategy_vs_benchmarks(regout_df, tag, config)
+                    if plot_path:
+                        logger.info(f"📈 Strategy benchmark plot created: {plot_path}")
             
             # Also create simple comparison plot
             simple_plot = create_simple_comparison_plot(regout_list, sweep_tags, config)
             if simple_plot:
-                print(f"📈 Simple comparison plot created: {simple_plot}")
+                logger.info(f"📈 Simple comparison plot created: {simple_plot}")
             
-            # Display performance summary table
+            # Display enhanced performance summary table
             display_performance_summary_table(regout_list, sweep_tags)
             
         except Exception as e:
-            print(f"Warning: Could not generate tear sheet: {str(e)}")
+            logger.error(f"Warning: Could not generate tear sheet: {str(e)}")
             import traceback
             traceback.print_exc()
         
@@ -1672,12 +2058,60 @@ def display_performance_summary_table(regout_list, sweep_tags):
                 sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
                 max_drawdown = (portfolio_returns.cumsum() - portfolio_returns.cumsum().expanding().max()).min()
                 
+                # Count available benchmarks
+                benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
+                benchmark_count = len(benchmark_cols)
+                
+                # Find best benchmark for comparison (prioritize strategy-appropriate ones)
+                best_benchmark_info = "N/A"
+                if benchmark_cols:
+                    # Determine strategy type for better benchmark selection
+                    strategy_type = 'equal_weight'
+                    if 'longshort' in tag.lower() or 'long_short' in tag.lower():
+                        strategy_type = 'long_short'
+                    elif 'confidenceweighted' in tag.lower() or 'confidence_weighted' in tag.lower() or 'confidence' in tag.lower():
+                        strategy_type = 'confidence_weighted'
+                    
+                    # Priority order for different strategy types
+                    if strategy_type == 'long_short':
+                        priority_benchmarks = ['benchmark_zero_return', 'benchmark_random_long_short', 'benchmark_equal_weight_targets']
+                    elif strategy_type == 'confidence_weighted':
+                        priority_benchmarks = ['benchmark_risk_parity', 'benchmark_spy_only', 'benchmark_equal_weight_targets']
+                    else:  # equal_weight
+                        priority_benchmarks = ['benchmark_spy_only', 'benchmark_equal_weight_targets', 'benchmark_vti_market']
+                    
+                    best_info_ratio = -np.inf
+                    
+                    # First, try priority benchmarks
+                    for priority_benchmark in priority_benchmarks:
+                        if priority_benchmark in regout_df.columns:
+                            benchmark_ret = regout_df[priority_benchmark].dropna()
+                            if len(benchmark_ret) > 0:
+                                info_ratio = calculate_information_ratio(portfolio_returns, benchmark_ret)
+                                if info_ratio > best_info_ratio:
+                                    best_info_ratio = info_ratio
+                                    benchmark_name = format_benchmark_name(priority_benchmark)
+                                    best_benchmark_info = f"{benchmark_name} (IR: {info_ratio:.2f})"
+                    
+                    # If no priority benchmarks found, use any available benchmark
+                    if best_benchmark_info == "N/A":
+                        for benchmark_col in benchmark_cols:
+                            benchmark_ret = regout_df[benchmark_col].dropna()
+                            if len(benchmark_ret) > 0:
+                                info_ratio = calculate_information_ratio(portfolio_returns, benchmark_ret)
+                                if info_ratio > best_info_ratio:
+                                    best_info_ratio = info_ratio
+                                    benchmark_name = format_benchmark_name(benchmark_col)
+                                    best_benchmark_info = f"{benchmark_name} (IR: {info_ratio:.2f})"
+                
                 results_summary.append({
                     'Strategy': tag,
                     'Annual Return (%)': annual_return,
                     'Annual Vol (%)': annual_vol,
                     'Sharpe Ratio': sharpe_ratio,
                     'Max Drawdown (%)': max_drawdown,
+                    'Benchmarks': benchmark_count,
+                    'Best vs Benchmark': best_benchmark_info,
                     'Data Points': len(portfolio_returns),
                     'Date Range': f"{portfolio_returns.index.min().date()} to {portfolio_returns.index.max().date()}"
                 })
@@ -1694,7 +2128,8 @@ def display_performance_summary_table(regout_list, sweep_tags):
         display_df['Sharpe Ratio'] = display_df['Sharpe Ratio'].apply(lambda x: f"{x:.2f}")
         display_df['Max Drawdown (%)'] = display_df['Max Drawdown (%)'].apply(lambda x: f"{x:.2%}")
         
-        print(display_df[['Strategy', 'Annual Return (%)', 'Annual Vol (%)', 'Sharpe Ratio', 'Max Drawdown (%)']].to_string(index=False))
+        print("📊 STRATEGY PERFORMANCE WITH BENCHMARKING:")
+        print(display_df[['Strategy', 'Annual Return (%)', 'Sharpe Ratio', 'Max Drawdown (%)', 'Benchmarks', 'Best vs Benchmark']].to_string(index=False))
         
         print(f"\n📊 Completed {len(results_summary)} successful simulations")
         
@@ -1785,7 +2220,39 @@ def demonstrate_portfolio_return_calculation():
     print("="*80)
 
 
+def test_benchmarking_framework():
+    """Basic test of the benchmarking framework."""
+    try:
+        # Test benchmark calculator creation
+        config = BenchmarkConfig()
+        
+        # Test equal weight benchmark
+        eq_benchmark = EqualWeightBenchmark(['SPY', 'QQQ'], config)
+        assert eq_benchmark.get_description() is not None
+        logger.info(f"✅ EqualWeightBenchmark test passed: {eq_benchmark.get_description()}")
+        
+        # Test benchmark manager
+        manager = BenchmarkManager('equal_weight', ['SPY', 'QQQ'], ['XLK', 'XLF'], config)
+        assert len(manager.benchmarks) > 0
+        logger.info(f"✅ BenchmarkManager test passed: {len(manager.benchmarks)} benchmarks created")
+        
+        # Test benchmark descriptions
+        descriptions = manager.get_benchmark_descriptions()
+        for name, desc in descriptions.items():
+            logger.info(f"  - {name}: {desc}")
+        
+        logger.info("✅ All benchmarking framework tests passed!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Benchmarking framework test failed: {str(e)}")
+        return False
+
 if __name__ == "__main__":
+    # Test benchmarking framework
+    logger.info("Testing benchmarking framework...")
+    test_benchmarking_framework()
+    
     # Run demonstration
     demonstrate_portfolio_return_calculation()
     

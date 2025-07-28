@@ -26,11 +26,12 @@ How to Use:
    sweeps.
 2. Run the script. The simulation results will be stored in an xarray Dataset
    and key performance metrics will be printed.
-3. A detailed performance report will be generated using the `quantstats` library.
+3. A detailed performance report will be generated using professional tear sheets.
 """
 
 import os
 import warnings
+import logging
 from datetime import datetime
 import time
 import pytz
@@ -38,132 +39,428 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import yfinance as yf
-import matplotlib.pyplot as plt
-from scipy.stats import norm
+# matplotlib and scipy imports moved to where needed
 from IPython.display import display
+from abc import ABC, abstractmethod
+from typing import Dict, List
+from dataclasses import dataclass
 
 # Scikit-learn and statsmodels
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error as rmse, mean_absolute_error as mae, r2_score
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
+TRADING_DAYS_PER_YEAR = 252
+QUARTERLY_WINDOW_DAYS = 63
+MONTHLY_RETRAIN_DAYS = 21
+WEEKLY_RETRAIN_DAYS = 5
+DAILY_RETRAIN_DAYS = 1
+
+def format_benchmark_name(benchmark_col: str) -> str:
+    """Format benchmark column name for display with abbreviations."""
+    name = benchmark_col.replace('benchmark_', '').replace('_', ' ').title()
+    # Apply abbreviations
+    if name == 'Equal Weight Targets':
+        return 'EQ Weight'
+    return name
+
 # Utility functions from our custom library
 from utils_simulate import (
     simplify_teos, log_returns, generate_train_predict_calender,
-    StatsModelsWrapper_with_OLS, p_by_year, create_results_xarray,
-    plot_xarray_results, calculate_performance_metrics
+    StatsModelsWrapper_with_OLS
 )
 
-# Automated performance analytics
-try:
-    import quantstats as qs
-except ImportError:
-    print("quantstats not found. Please install it: pip install quantstats")
-    qs = None
+# Professional plotting utilities
+from plotting_utils import create_professional_tear_sheet, create_simple_comparison_plot
 
 
-# --- Core Simulation Functions ---
 
+# --- Benchmarking Framework for Single-Target ---
+
+@dataclass
+class SingleTargetBenchmarkConfig:
+    """Configuration for single-target benchmark calculations."""
+    include_transaction_costs: bool = True
+    rebalancing_frequency: str = 'daily'  # 'daily', 'weekly', 'monthly'
+    benchmark_types: List[str] = None
+    volatility_window: int = 63  # Days for volatility calculation
+    
+    def __post_init__(self):
+        if self.benchmark_types is None:
+            # Don't filter benchmarks by default - let strategy type determine appropriate ones
+            self.benchmark_types = None
+        if self.rebalancing_frequency not in ['daily', 'weekly', 'monthly']:
+            raise ValueError(f"Invalid rebalancing_frequency: {self.rebalancing_frequency}")
+
+class SingleTargetBenchmarkCalculator(ABC):
+    """Abstract base class for single-target benchmark calculations."""
+    
+    def __init__(self, config: SingleTargetBenchmarkConfig = None):
+        self.config = config or SingleTargetBenchmarkConfig()
+    
+    @abstractmethod
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        """Calculate benchmark returns for given dates."""
+        pass
+    
+    @abstractmethod
+    def get_description(self) -> str:
+        """Return a description of this benchmark."""
+        pass
+
+class BuyAndHoldBenchmark(SingleTargetBenchmarkCalculator):
+    """Buy and hold the target ETF."""
+    
+    def __init__(self, target_etf: str, config: SingleTargetBenchmarkConfig = None):
+        super().__init__(config)
+        self.target_etf = target_etf
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if self.target_etf in data.columns:
+            return data[self.target_etf].reindex(dates).fillna(0)
+        return pd.Series(0.0, index=dates)
+    
+    def get_description(self) -> str:
+        return f"Buy-and-hold {self.target_etf}"
+
+class ZeroReturnBenchmark(SingleTargetBenchmarkCalculator):
+    """Zero return benchmark (cash equivalent)."""
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        return pd.Series(0.0, index=dates)
+    
+    def get_description(self) -> str:
+        return "Zero return (cash equivalent)"
+
+class MarketIndexBenchmark(SingleTargetBenchmarkCalculator):
+    """Benchmark against a market index."""
+    
+    def __init__(self, index_etf: str, config: SingleTargetBenchmarkConfig = None):
+        super().__init__(config)
+        self.index_etf = index_etf
+    
+    def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
+        if self.index_etf in data.columns:
+            return data[self.index_etf].reindex(dates).fillna(0)
+        logger.warning(f"ETF {self.index_etf} not found in data, using zeros")
+        return pd.Series(0.0, index=dates)
+    
+    def get_description(self) -> str:
+        return f"Buy-and-hold {self.index_etf}"
+
+class SingleTargetBenchmarkManager:
+    """Manages benchmark selection for single-target strategies."""
+    
+    def __init__(self, target_etf: str, feature_etfs: List[str] = None, 
+                 config: SingleTargetBenchmarkConfig = None):
+        self.target_etf = target_etf
+        self.feature_etfs = feature_etfs or []
+        self.all_etfs = [target_etf] + self.feature_etfs
+        self.config = config or SingleTargetBenchmarkConfig()
+        self.benchmarks = self._create_benchmarks()
+    
+    def _create_benchmarks(self) -> Dict[str, SingleTargetBenchmarkCalculator]:
+        """Create appropriate benchmarks for single-target strategies."""
+        benchmarks = {}
+        
+        # Core benchmarks
+        benchmarks['buy_and_hold'] = BuyAndHoldBenchmark(self.target_etf, self.config)
+        benchmarks['zero_return'] = ZeroReturnBenchmark(self.config)
+        
+        # Market benchmarks
+        if 'SPY' not in [self.target_etf] and 'SPY' in self.all_etfs:
+            benchmarks['spy_market'] = MarketIndexBenchmark('SPY', self.config)
+        if 'VTI' in self.all_etfs:
+            benchmarks['vti_market'] = MarketIndexBenchmark('VTI', self.config)
+        
+        # Filter benchmarks based on config (only if explicitly set)
+        if self.config.benchmark_types is not None:
+            benchmarks = {k: v for k, v in benchmarks.items() 
+                         if k in self.config.benchmark_types}
+        
+        return benchmarks
+    
+    def calculate_all_benchmarks(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+        """Calculate returns for all benchmarks."""
+        benchmark_returns = {}
+        
+        for name, benchmark in self.benchmarks.items():
+            try:
+                returns = benchmark.calculate_returns(data, dates)
+                benchmark_returns[f'benchmark_{name}'] = returns
+                logger.info(f"Calculated benchmark: {name} - {benchmark.get_description()}")
+            except Exception as e:
+                logger.error(f"Failed to calculate benchmark {name}: {e}")
+                benchmark_returns[f'benchmark_{name}'] = pd.Series(0.0, index=dates)
+        
+        return pd.DataFrame(benchmark_returns, index=dates)
+
+def calculate_information_ratio(strategy_returns: pd.Series, benchmark_returns: pd.Series) -> float:
+    """Calculate the Information Ratio between strategy and benchmark returns."""
+    try:
+        # Align the series to ensure matching dates
+        aligned_strategy, aligned_benchmark = strategy_returns.align(benchmark_returns, join='inner')
+        
+        if len(aligned_strategy) == 0:
+            return 0.0
+        
+        # Calculate excess returns
+        excess_returns = aligned_strategy - aligned_benchmark
+        
+        # Annualize
+        excess_mean = excess_returns.mean() * TRADING_DAYS_PER_YEAR
+        tracking_error = excess_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+        
+        # Calculate Information Ratio
+        if tracking_error == 0 or np.isnan(tracking_error):
+            return 0.0
+        
+        return excess_mean / tracking_error
+    except Exception as e:
+        logger.error(f"Error calculating information ratio: {e}")
+        return 0.0
+
+# --- Position Sizing Strategy Pattern ---
+
+class PositionSizer(ABC):
+    """Abstract base class for position sizing strategies."""
+    
+    @abstractmethod
+    def calculate_position(self, predictions: pd.Series, **kwargs) -> pd.Series:
+        """Calculate position sizes based on predictions."""
+        pass
+    
+    @abstractmethod
+    def get_name(self) -> str:
+        """Return the name of this position sizing strategy."""
+        pass
+
+class BinaryPositionSizer(PositionSizer):
+    """Binary position sizing: long if prediction > 0, else short."""
+    
+    def __init__(self, short_position: float = -1.0, long_position: float = 1.0):
+        self.short_position = short_position
+        self.long_position = long_position
+    
+    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+        conditions = [predictions <= 0, predictions > 0]
+        positions = [self.short_position, self.long_position]
+        return pd.Series(np.select(conditions, positions, default=np.nan), index=predictions.index)
+    
+    def get_name(self) -> str:
+        return f"Binary({self.short_position:.1f},{self.long_position:.1f})"
+
+class QuartilePositionSizer(PositionSizer):
+    """Quartile-based position sizing based on prediction confidence."""
+    
+    def __init__(self, positions: List[float] = None):
+        self.positions = positions or [0, 0.5, 1.5, 2.0]
+        if len(self.positions) != 4:
+            raise ValueError("QuartilePositionSizer requires exactly 4 position values")
+    
+    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+        # Convert predictions to normalized quantiles
+        from scipy.stats import norm
+        from sklearn.preprocessing import StandardScaler
+        
+        scaler = StandardScaler()
+        normalized_preds = scaler.fit_transform(predictions.values.reshape(-1, 1)).flatten()
+        quantile_preds = norm.cdf(normalized_preds)
+        
+        conditions = [
+            (quantile_preds >= 0.00) & (quantile_preds < 0.25),
+            (quantile_preds >= 0.25) & (quantile_preds < 0.50),
+            (quantile_preds >= 0.50) & (quantile_preds < 0.75),
+            (quantile_preds >= 0.75) & (quantile_preds <= 1.00)
+        ]
+        
+        return pd.Series(np.select(conditions, self.positions, default=np.nan), index=predictions.index)
+    
+    def get_name(self) -> str:
+        return f"Quartile({','.join(map(str, self.positions))})"
+
+class ProportionalPositionSizer(PositionSizer):
+    """Position sizing proportional to prediction strength."""
+    
+    def __init__(self, max_position: float = 2.0, min_position: float = 0.0):
+        self.max_position = max_position
+        self.min_position = min_position
+    
+    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+        # Normalize predictions to [0,1] range
+        pred_min, pred_max = predictions.min(), predictions.max()
+        if pred_max == pred_min:
+            return pd.Series(self.min_position, index=predictions.index)
+        
+        normalized = (predictions - pred_min) / (pred_max - pred_min)
+        positions = self.min_position + normalized * (self.max_position - self.min_position)
+        
+        return positions
+    
+    def get_name(self) -> str:
+        return f"Proportional({self.min_position:.1f}-{self.max_position:.1f})"
+
+# Legacy functions for backwards compatibility
 def L_func_2(df, pred_col='predicted', params=[]):
     """Binary position sizing: long if prediction > 0, else short."""
-    t_conditions = [df[pred_col] <= 0, df[pred_col] > 0]
-    t_positions = [params[0], params[1]]
-    return np.select(t_conditions, t_positions, default=np.nan)
+    sizer = BinaryPositionSizer(params[0] if len(params) > 0 else -1.0, 
+                                params[1] if len(params) > 1 else 1.0)
+    return sizer.calculate_position(df[pred_col])
 
 def L_func_3(df, pred_col='preds_index', params=[]):
     """Quartile-based position sizing based on prediction confidence."""
-    t_conditions = [
-        (df[pred_col].between(0.00, 0.25)),
-        (df[pred_col].between(0.25, 0.50)),
-        (df[pred_col].between(0.50, 0.75)),
-        (df[pred_col].between(0.75, 1.00))
-    ]
-    t_positions = params
-    return np.select(t_conditions, t_positions, default=np.nan)
+    sizer = QuartilePositionSizer(params if params else [0, 0.5, 1.5, 2])
+    return sizer.calculate_position(df[pred_col])
 
 def L_func_4(ds, params=[]):
     """Alternative quartile position sizing (operates on a Series)."""
-    t_conditions = [
-        (ds.between(0.00, 0.25)),
-        (ds.between(0.25, 0.50)),
-        (ds.between(0.50, 0.75)),
-        (ds.between(0.75, 1.00))
-    ]
-    t_positions = params
-    return np.select(t_conditions, t_positions, default=np.nan)
+    sizer = QuartilePositionSizer(params if params else [0, 0.5, 1.5, 2])
+    return sizer.calculate_position(ds)
 
-def sim_stats(regout_list, sweep_tags, author='CG', trange=None):
+# --- Core Simulation Functions ---
+
+def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, target_etf='SPY', 
+                           feature_etfs=None, benchmark_manager=None, config=None):
     """
-    Calculates and prints comprehensive simulation statistics.
-    It also uses quantstats for a detailed HTML report if available.
+    Enhanced simulation statistics with benchmarking for single-target strategies.
+    Calculates and prints comprehensive simulation statistics including benchmark comparisons.
     """
+    results = {}
     df = pd.DataFrame(dtype=object)
     df.index.name = 'metric'
+    
     print('SIMULATION RANGE:', 'from', trange.start, 'to', trange.stop)
+    logger.info(f"Calculating statistics for {len(regout_list)} strategies")
 
     for n, testlabel in enumerate(sweep_tags):
-        reg_out = regout_list[n].loc[trange, :]
+        try:
+            reg_out = regout_list[n].loc[trange, :]
+            
+            if reg_out.empty:
+                logger.warning(f"No data for strategy {testlabel} in specified range")
+                continue
 
-        # --- Metric Calculation Confirmation ---
-        # Annualized Return: (Daily Mean Return) * 252
-        mean = 252 * reg_out.perf_ret.mean()
-        # Annualized Volatility: (Daily StDev) * sqrt(252)
-        std = (np.sqrt(252)) * reg_out.perf_ret.std()
-        # Sharpe Ratio: (Annualized Return) / (Annualized Volatility)
-        # Note: Assumes a risk-free rate of 0.
-        sharpe = mean / std if std != 0 else np.nan
+            # --- Core Performance Metrics ---
+            mean_return = TRADING_DAYS_PER_YEAR * reg_out.perf_ret.mean()
+            volatility = np.sqrt(TRADING_DAYS_PER_YEAR) * reg_out.perf_ret.std()
+            sharpe_ratio = mean_return / volatility if volatility != 0 else np.nan
+            
+            # Maximum drawdown calculation
+            cumulative_returns = reg_out.perf_ret.cumsum()
+            running_max = cumulative_returns.expanding().max()
+            drawdown = cumulative_returns - running_max
+            max_drawdown = drawdown.min()
+            
+            df.loc['return', testlabel] = mean_return
+            df.loc['stdev', testlabel] = volatility
+            df.loc['sharpe', testlabel] = sharpe_ratio
+            df.loc['max_drawdown', testlabel] = max_drawdown
+            # Safe leverage column access
+            if 'leverage' in reg_out.columns:
+                df.loc['avg_leverage', testlabel] = reg_out.leverage.mean()
+                df.loc['leverage_1_return', testlabel] = mean_return / reg_out.leverage.mean() if reg_out.leverage.mean() != 0 else np.nan
+            else:
+                df.loc['avg_leverage', testlabel] = np.nan
+                df.loc['leverage_1_return', testlabel] = np.nan
+                logger.warning(f"Leverage column missing for strategy {testlabel}")
+            
+            # Prediction accuracy metrics
+            df.loc['pos_prediction_ratio', testlabel] = (
+                np.sum(np.isfinite(reg_out['prediction']) & (reg_out['prediction'] > 0)) /
+                np.sum(np.isfinite(reg_out['prediction'])) if np.sum(np.isfinite(reg_out['prediction'])) > 0 else np.nan
+            )
+            df.loc['rmse', testlabel] = np.sqrt(rmse(reg_out.prediction, reg_out.actual))
+            df.loc['mae', testlabel] = mae(reg_out.prediction, reg_out.actual)
+            df.loc['r2', testlabel] = r2_score(reg_out.actual, reg_out.prediction)
 
-        df.loc['return', testlabel] = mean
-        df.loc['stdev', testlabel] = std
-        df.loc['sharpe', testlabel] = sharpe
-        df.loc['avg_beta', testlabel] = reg_out.leverage.mean()
-        df.loc['beta_1_return', testlabel] = df.loc['return', testlabel] / reg_out.leverage.mean() if reg_out.leverage.mean() != 0 else np.nan
-        df.loc['pos_bet_ratio', testlabel] = (
-            np.sum(np.isfinite(reg_out['prediction']) & (reg_out['prediction'] > 0)) /
-            np.sum(np.isfinite(reg_out['prediction'])) if np.sum(np.isfinite(reg_out['prediction'])) > 0 else np.nan
-        )
-        df.loc['rmse', testlabel] = np.sqrt(rmse(reg_out.prediction, reg_out.actual))
-        df.loc['mae', testlabel] = mae(reg_out.prediction, reg_out.actual)
-        df.loc['r2', testlabel] = r2_score(reg_out.actual, reg_out.prediction)
+            # Basic target benchmark (buy-and-hold target ETF)
+            target_return = TRADING_DAYS_PER_YEAR * reg_out.actual.mean()
+            target_volatility = np.sqrt(TRADING_DAYS_PER_YEAR) * reg_out.actual.std()
+            df.loc['target_return', testlabel] = target_return
+            df.loc['target_volatility', testlabel] = target_volatility
+            df.loc['target_sharpe', testlabel] = target_return / target_volatility if target_volatility != 0 else np.nan
+            
+            # Enhanced benchmarking using multi-target approach
+            if benchmark_manager:
+                try:
+                    # Get all ETF returns for the period
+                    all_etfs = [target_etf] + (feature_etfs or [])
+                    start_date = config.get('start_date', '2010-01-01') if config else '2010-01-01'
+                    X, y = load_and_prepare_data(all_etfs, target_etf, start_date=start_date)
+                    all_returns_data = pd.concat([X, y.to_frame(target_etf)], axis=1)
+                    
+                    # Calculate benchmark returns for the simulation period
+                    benchmark_returns_df = benchmark_manager.calculate_all_benchmarks(
+                        all_returns_data, reg_out.index
+                    )
+                    
+                    # Add benchmark results to reg_out for later use
+                    for benchmark_col in benchmark_returns_df.columns:
+                        reg_out = reg_out.copy()  # Avoid SettingWithCopyWarning
+                        reg_out[benchmark_col] = benchmark_returns_df[benchmark_col]
+                    
+                    # Enhanced benchmark analysis (using multi-target approach)
+                    benchmark_cols = [col for col in benchmark_returns_df.columns if col.startswith('benchmark_')]
+                    if benchmark_cols:
+                        best_info_ratio = -np.inf
+                        best_benchmark_name = "N/A"
+                        best_excess_return = 0
+                        
+                        # Calculate metrics for each benchmark
+                        for benchmark_col in benchmark_cols:
+                            benchmark_name = benchmark_col.replace('benchmark_', '')
+                            benchmark_ret = benchmark_returns_df[benchmark_col]
+                            
+                            # Calculate information ratio vs this benchmark
+                            info_ratio = calculate_information_ratio(reg_out.perf_ret, benchmark_ret)
+                            
+                            # Calculate excess return vs this benchmark
+                            excess_return = reg_out.perf_ret.mean() * TRADING_DAYS_PER_YEAR - benchmark_ret.mean() * TRADING_DAYS_PER_YEAR
+                            
+                            # Track the best benchmark
+                            if info_ratio > best_info_ratio:
+                                best_info_ratio = info_ratio
+                                best_benchmark_name = benchmark_name.replace('_', ' ').title()
+                                best_excess_return = excess_return
+                    
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", FutureWarning)
+                            df.loc['best_benchmark', testlabel] = str(best_benchmark_name)
+                        df.loc['best_info_ratio', testlabel] = best_info_ratio
+                        df.loc['best_excess_return', testlabel] = best_excess_return
+                    else:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", FutureWarning)
+                            df.loc['best_benchmark', testlabel] = str("No benchmarks")
+                        df.loc['best_info_ratio', testlabel] = np.nan
+                        df.loc['best_excess_return', testlabel] = np.nan
+                    
+                except Exception as e:
+                    logger.error(f"Benchmark calculation failed for {testlabel}: {e}")
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", FutureWarning)
+                        df.loc['best_benchmark', testlabel] = str("Error")
+                    df.loc['best_info_ratio', testlabel] = np.nan
+                    df.loc['best_excess_return', testlabel] = np.nan
 
-        # Benchmark calculations
-        bench_ret = 252 * reg_out.actual.mean()
-        bench_std = (np.sqrt(252)) * reg_out.actual.std()
-        df.loc['benchmark return', testlabel] = bench_ret
-        df.loc['benchmark std', testlabel] = bench_std
-        df.loc['benchmark sharpe', testlabel] = bench_ret / bench_std if bench_std != 0 else np.nan
+            df.loc['start_date', testlabel] = min(reg_out.prediction.index).date()
+            df.loc['end_date', testlabel] = max(reg_out.prediction.index).date()
+            df.loc['author', testlabel] = author
+            
+            # Store enhanced results for plotting
+            results[testlabel] = reg_out.copy()
 
-        df.loc['beg_pred', testlabel] = min(reg_out.prediction.index).date()
-        df.loc['end_pred', testlabel] = max(reg_out.prediction.index).date()
-        df.loc['author', testlabel] = author
 
-        # Automated reporting with quantstats
-        if qs:
-            # Ensure the reports directory exists
-            os.makedirs('reports', exist_ok=True)
-            report_filename = f'reports/{testlabel}_report.html'
-            print(f"\n--- Generating QuantStats HTML report for: {testlabel} ---")
-            print(f"    To view, open the file: {report_filename}")
-            try:
-                # Manually create a complete daily index to fix reporting issues.
-                # quantstats requires a series with a value for every single day.
-                returns = reg_out['perf_ret']
-                benchmark = reg_out['actual']
+        except Exception as e:
+            logger.error(f"Error calculating statistics for {testlabel}: {e}")
+            continue
 
-                # Create a full daily date range from the first to the last date.
-                full_date_range = pd.date_range(start=returns.index.min(), end=returns.index.max(), freq='D')
-
-                # Reindex the series to the full daily range, filling non-trading days with 0.
-                daily_returns = returns.reindex(full_date_range).fillna(0)
-                daily_benchmark = benchmark.reindex(full_date_range).fillna(0)
-
-                # Generate a full HTML report
-                qs.reports.html(daily_returns, benchmark=daily_benchmark,
-                                        output=report_filename, title=f'{testlabel} Performance')
-            except Exception as e:
-                print(f"Could not generate QuantStats report for {testlabel}: {e}")
-
-    return df
+    return df, results
 
 
 def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, param_grid={}, tag=None):
@@ -216,7 +513,7 @@ def load_and_prepare_data(etf_list, target_etf, start_date=None):
     The target `y` for a given day `t` is the return of the `target_etf` on day `t+1`.
     """
     print(f"Downloading and preparing data from {start_date}...")
-    all_etf_closing_prices_df = yf.download(etf_list, start=start_date)['Close']
+    all_etf_closing_prices_df = yf.download(etf_list, start=start_date, auto_adjust=True)['Close']
     etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
 
     # Set timezone and align timestamps
@@ -247,77 +544,178 @@ def load_and_prepare_data(etf_list, target_etf, start_date=None):
 
 def main():
     """
-    Main function to configure and run the simulation.
+    Enhanced main function with benchmarking and professional reporting.
     """
-    # --- Simulation Configuration ---
+    start_time = time.time()
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # --- Enhanced Simulation Configuration ---
     config = {
         "target_etf": "SPY",
         "feature_etfs": ['SPY','XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLU'],
-        "start_date": "2022-01-01",
+        "start_date": "2010-01-01",
         "window_size": 400,
         "window_type": "expanding",
-        "author": "CG"
+        "author": "CG",
+        "run_timestamp": run_timestamp
     }
-
-    # --- Data Loading ---
-    X, y = load_and_prepare_data(
-        config["feature_etfs"], 
-        config["target_etf"], 
-        config["start_date"]
-    )
     
-    # --- Parameter Sweep Setup ---
-    n_ewa_lags_list = [2, 4, 8]
-    sweep_tags = [f'ewa_halflife_n={x}' for x in n_ewa_lags_list]
-    
-    X_list = [X.ewm(halflife=n, min_periods=n).mean().dropna() for n in n_ewa_lags_list]
-    y_list = [y.reindex(X_list[n].index) for n in range(len(X_list))]
+    logger.info(f"Starting single-target simulation: {run_timestamp}")
+    print(f"🚀 Single-Target Simulation Started - ID: {run_timestamp}")
 
-    regout_list = []
-    zscaler = StandardScaler().set_output(transform='pandas')
-
-    # --- Run Simulation Sweep ---
-    for n, tag in enumerate(sweep_tags):
-        pipe_steps = [
-            ('scaler', StandardScaler()),
-            ('final_estimator', StatsModelsWrapper_with_OLS(X_list[n], y_list[n]))
-        ]
-
-        regout_df, _ = Simulate(
-            X=X_list[n],
-            y=y_list[n],
-            window_size=config["window_size"],
-            window_type=config["window_type"],
-            pipe_steps=pipe_steps,
-            tag=tag
-        )
-
-        # If simulation produced no results, skip to the next sweep
-        if regout_df.empty:
-            continue
-
-        # Process results
-        regout_df['preds_index'] = norm.cdf(zscaler.fit_transform(regout_df[['prediction']]))
-        regout_df['actual'] = y.loc[regout_df.index].dropna()
-        regout_df['leverage'] = L_func_3(regout_df, pred_col='preds_index', params=[0, 0.5, 1.5, 2])
-        regout_df['perf_ret'] = regout_df['leverage'] * regout_df['actual']
-        regout_list.append(regout_df)
-
-    # --- Analyze and Report Results ---
-    trange = slice(regout_list[-1].index[0], regout_list[-1].index[-1])
-    stats_df = sim_stats(regout_list, sweep_tags, author=config["author"], trange=trange)
-    
-    print("\n--- Summary Statistics ---")
     try:
-        display(stats_df)
-    except NameError:
-        print(stats_df)
-    
-    # Plot cumulative returns
-    all_perf_df = pd.concat([df['perf_ret'].rename(tag) for df, tag in zip(regout_list, sweep_tags)], axis=1)
-    all_perf_df.cumsum().plot(figsize=(15,8), title="Cumulative Strategy Returns")
-    plt.ylabel("Cumulative Log-Return")
-    plt.show()
+        # --- Data Loading ---
+        logger.info("Loading and preparing data...")
+        X, y = load_and_prepare_data(
+            config["feature_etfs"], 
+            config["target_etf"], 
+            config["start_date"]
+        )
+        
+        # --- Initialize Benchmarking ---
+        benchmark_config = SingleTargetBenchmarkConfig()
+        benchmark_manager = SingleTargetBenchmarkManager(
+            target_etf=config["target_etf"],
+            feature_etfs=config["feature_etfs"],
+            config=benchmark_config
+        )
+        logger.info(f"Initialized benchmarks: {list(benchmark_manager.benchmarks.keys())}")
+        
+        # --- Parameter Sweep Setup ---
+        position_strategies = [
+            ('Binary', BinaryPositionSizer(-1.0, 1.0)),
+            ('Quartile', QuartilePositionSizer([0, 0.5, 1.5, 2.0])),
+            ('Proportional', ProportionalPositionSizer(2.0, 0.0))
+        ]
+        
+        n_ewa_lags_list = [2, 4, 8]
+        sweep_combinations = []
+        
+        # Create combinations of EWA parameters and position sizing strategies
+        for ewa_lag in n_ewa_lags_list:
+            for pos_name, pos_sizer in position_strategies:
+                sweep_combinations.append({
+                    'ewa_lag': ewa_lag,
+                    'pos_name': pos_name,
+                    'pos_sizer': pos_sizer,
+                    'tag': f'st_ewa{ewa_lag}_{pos_name.lower()}'
+                })
+        
+        X_processed = {}
+        y_processed = {}
+        for ewa_lag in n_ewa_lags_list:
+            X_ewa = X.ewm(halflife=ewa_lag, min_periods=ewa_lag).mean().dropna()
+            X_processed[ewa_lag] = X_ewa
+            y_processed[ewa_lag] = y.reindex(X_ewa.index)
+
+        regout_list = []
+        sweep_tags = []
+
+        # --- Run Enhanced Simulation Sweep ---
+        logger.info(f"Running {len(sweep_combinations)} strategy combinations...")
+        for combo in sweep_combinations:
+            ewa_lag = combo['ewa_lag']
+            pos_sizer = combo['pos_sizer']
+            tag = combo['tag']
+            
+            logger.info(f"Processing strategy: {tag}")
+            
+            # Prepare pipeline with StatsModels OLS (preserved as requested)
+            pipe_steps = [
+                ('scaler', StandardScaler()),
+                ('final_estimator', StatsModelsWrapper_with_OLS())
+            ]
+
+            regout_df, _ = Simulate(
+                X=X_processed[ewa_lag],
+                y=y_processed[ewa_lag],
+                window_size=config["window_size"],
+                window_type=config["window_type"],
+                pipe_steps=pipe_steps,
+                tag=tag
+            )
+
+            # If simulation produced no results, skip to the next sweep
+            if regout_df.empty:
+                logger.warning(f"No results for strategy {tag}")
+                continue
+
+            # Enhanced results processing with new position sizing
+            try:
+                regout_df['actual'] = y.loc[regout_df.index].dropna()
+                
+                # Use new position sizer instead of legacy functions
+                regout_df['leverage'] = pos_sizer.calculate_position(regout_df['prediction'])
+                regout_df['perf_ret'] = regout_df['leverage'] * regout_df['actual']
+                
+                # Rename for consistency with multi-target plotting
+                regout_df['portfolio_ret'] = regout_df['perf_ret']
+                
+                regout_list.append(regout_df)
+                sweep_tags.append(tag)
+                
+                logger.info(f"✅ Strategy {tag} completed successfully")
+                
+            except Exception as e:
+                logger.error(f"Error processing results for {tag}: {e}")
+                continue
+
+        if not regout_list:
+            logger.error("No successful simulations completed")
+            return
+
+        # --- Enhanced Analysis and Reporting ---
+        trange = slice(regout_list[-1].index[0], regout_list[-1].index[-1])
+        logger.info("Calculating comprehensive statistics...")
+        
+        stats_df, enhanced_results = sim_stats_single_target(
+            regout_list, sweep_tags, 
+            author=config["author"], 
+            trange=trange,
+            target_etf=config["target_etf"],
+            feature_etfs=config["feature_etfs"],
+            benchmark_manager=benchmark_manager,
+            config=config
+        )
+        
+        print("\n📊 ENHANCED PERFORMANCE SUMMARY")
+        print("=" * 50)
+        try:
+            display(stats_df.round(4))
+        except NameError:
+            print(stats_df.round(4))
+        
+        # --- Professional Visualization ---
+        logger.info("Generating professional tear sheet...")
+        tear_sheet_path = create_professional_tear_sheet(
+            list(enhanced_results.values()), sweep_tags, config
+        )
+        
+        # Simple comparison plot as backup
+        simple_plot_path = create_simple_comparison_plot(
+            list(enhanced_results.values()), sweep_tags, config
+        )
+        
+        # --- Performance Summary ---
+        elapsed_time = time.time() - start_time
+        print(f"\n🎯 SINGLE-TARGET SIMULATION COMPLETE")
+        print(f"   ⏱️  Runtime: {elapsed_time:.1f} seconds")
+        print(f"   📈 Strategies: {len(regout_list)}")
+        print(f"   📊 Reports generated in ./reports/")
+        
+        if tear_sheet_path:
+            print(f"   📄 Tear Sheet: {tear_sheet_path}")
+        if simple_plot_path:
+            print(f"   📈 Comparison: {simple_plot_path}")
+            
+        logger.info(f"Simulation completed successfully in {elapsed_time:.1f}s")
+        
+        return stats_df, enhanced_results
+        
+    except Exception as e:
+        logger.error(f"Simulation failed: {e}")
+        print(f"❌ Simulation failed: {e}")
+        raise
 
 if __name__ == "__main__":
     main()

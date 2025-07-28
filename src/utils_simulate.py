@@ -382,7 +382,7 @@ def create_results_xarray(results_dict: Dict[str, Union[pd.Series, np.ndarray]],
         if isinstance(first_series, pd.Series):
             time_index = first_series.index
         else:
-            time_index = pd.date_range(start='2020-01-01', periods=len(first_series))
+            time_index = pd.date_range(start='2010-01-01', periods=len(first_series))
     
     # Convert all results to consistent format
     data_vars = {}

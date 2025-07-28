@@ -8,16 +8,19 @@
 
 </div>
 
-A hands-on educational platform for **financial engineering students** to develop, backtest, and analyze trading strategies. Built with Python, xarray, and scikit-learn, this framework guides you through the **full quantitative research cycle**: data loading, feature engineering, model exploration, simulation, and reporting.
+A hands-on educational platform for **financial engineering students** to develop, backtest, and analyze trading strategies. Built with Python, xarray, and scikit-learn, this framework guides you through the **full quantitative research cycle**: data loading, feature engineering, model exploration, simulation, benchmarking, and professional reporting.
 
 **Developed by Conrad Gann for Blue Water Macro Corp. © 2025**
 
 ## Why This Framework?
 
 - **Educational Focus**: Step-by-step tutorials teach core concepts like time-series cross-validation, multi-dimensional data handling with xarray, and risk-adjusted performance metrics
-- **Full Research Cycle**: From raw data inputs to publication-quality reports—learn how quants at hedge funds structure their workflow
+- **Full Research Cycle**: From raw data inputs to publication-quality PDF reports—learn how quants at hedge funds structure their workflow
+- **Professional Benchmarking**: Built-in benchmark framework comparing strategies against buy-and-hold, zero-return, and custom benchmarks with information ratios and excess returns
 - **xarray for Finance**: Native use of xarray for standardized, multi-dimensional reporting (e.g., results across time/assets/strategies)—a skill increasingly valued in quant roles
 - **Real-World Strategies**: Simulate single-asset (e.g., SPY) and multi-asset (e.g., SPY/QQQ/IWM) predictions with position sizing, leverage, and portfolio optimization
+- **Extended Data Coverage**: Now supports 15+ years of historical data (2010-present) for robust backtesting
+- **Publication-Quality Output**: Professional tear sheets, performance summaries, and benchmark analysis in PDF/PNG formats
 - **Capstone-Ready**: Ideal for financial engineering projects—includes exercises, extensions, and resources from QuantNet/CFA
 - **Enterprise-Grade Analytics**: Leveraging Blue Water Macro's institutional insights and data science expertise
 
@@ -28,9 +31,11 @@ By completing this framework, students will:
 1. **Master time-series simulation** to avoid common pitfalls like look-ahead bias
 2. **Use xarray for efficient data organization** and visualization in finance
 3. **Build ML pipelines** for feature preprocessing and learner exploration
-4. **Generate professional graphs and reports** for strategy evaluation
-5. **Understand portfolio construction** and risk management principles
-6. **Apply quantitative methods** used in institutional settings
+4. **Implement professional benchmarking** with information ratios and excess returns
+5. **Generate publication-quality reports** with PDF tear sheets and performance analysis
+6. **Understand portfolio construction** and risk management principles
+7. **Configure advanced simulations** with flexible parameter management
+8. **Apply quantitative methods** used in institutional settings
 
 ## Quick Start
 
@@ -75,8 +80,9 @@ quant_trading_simulator/
 
 ### Core Modules (`src/`)
 - **`utils_simulate.py`**: Essential utilities for data preparation, returns calculation, and xarray operations
-- **`single_target_simulator.py`**: Educational single-asset (SPY) prediction framework
+- **`single_target_simulator.py`**: Educational single-asset (SPY) prediction framework with professional benchmarking
 - **`multi_target_simulator.py`**: Production-ready multi-asset prediction and portfolio construction
+- **`plotting_utils.py`**: Professional PDF tear sheets, performance visualization, and reporting utilities
 
 ### Educational Materials (`notebooks/`)
 - **Tutorial 1**: Single-target simulation walkthrough with sector ETFs
@@ -90,41 +96,150 @@ quant_trading_simulator/
 ## Example Workflow (Full Research Cycle)
 
 ```python
-# 1. INPUTS: Load ETF data via yfinance
+# 1. INPUTS: Load ETF data with extended coverage (2010-present)
 import yfinance as yf
-data = yf.download(['SPY', 'XLK', 'XLF'], start='2020-01-01')
+from src.single_target_simulator import load_and_prepare_data
+X, y = load_and_prepare_data(['SPY', 'XLK', 'XLF'], 'SPY', start_date='2010-01-01')
 
-# 2. PREPROCESSING: Feature engineering with xarray
-from src.utils_simulate import EWMTransformer, create_results_xarray
-transformer = EWMTransformer(halflife=5)
-features_smooth = transformer.fit_transform(features)
+# 2. CONFIGURATION: Professional simulation setup
+config = {
+    "target_etf": "SPY",
+    "feature_etfs": ['XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLU'],
+    "start_date": "2010-01-01",
+    "window_size": 400,
+    "window_type": "expanding",
+    "author": "Your Name"
+}
 
-# 3. EXPLORATION: Analyze feature importance
-from src.utils_simulate import p_by_year
-feat_analysis = p_by_year(X_features, y_target)
+# 3. BENCHMARKING: Setup professional benchmark comparison
+from src.single_target_simulator import SingleTargetBenchmarkManager, SingleTargetBenchmarkConfig
+benchmark_config = SingleTargetBenchmarkConfig()
+benchmark_manager = SingleTargetBenchmarkManager(
+    target_etf=config["target_etf"],
+    feature_etfs=config["feature_etfs"],
+    config=benchmark_config
+)
 
-# 4. SIMULATION: Walk-forward backtesting
-results = simulate_strategy(features_smooth, targets, model='ridge')
+# 4. SIMULATION: Walk-forward backtesting with multiple strategies
+from src.single_target_simulator import Simulate, L_func_2, L_func_3, L_func_4
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline
+from src.utils_simulate import EWMTransformer
 
-# 5. REPORTING: Generate publication-quality outputs
-results_xr = create_results_xarray(results)
-results_xr.plot.line(x='time', col='strategy', col_wrap=2)
+# Define position sizing strategies
+position_strategies = [
+    ('Binary', L_func_2),
+    ('Quartile', L_func_3), 
+    ('Proportional', L_func_4)
+]
+
+# Run simulation sweep
+regout_list = []
+sweep_tags = []
+
+for pos_name, pos_func in position_strategies:
+    pipe = Pipeline([
+        ('ewm', EWMTransformer(halflife=4)), 
+        ('rf', RandomForestRegressor(n_estimators=50))
+    ])
+    
+    regout = Simulate(X, y, window_size=400, pipe_steps=pipe, L_func=pos_func)
+    regout_list.append(regout)
+    sweep_tags.append(f'rf_ewm4_{pos_name.lower()}')
+
+# 5. PROFESSIONAL ANALYSIS: Statistics with benchmarking
+from src.single_target_simulator import sim_stats_single_target
+stats_df, enhanced_results = sim_stats_single_target(
+    regout_list, sweep_tags,
+    target_etf=config["target_etf"],
+    feature_etfs=config["feature_etfs"], 
+    benchmark_manager=benchmark_manager,
+    config=config
+)
+
+# 6. REPORTING: Generate publication-quality PDF tear sheets
+from src.plotting_utils import create_professional_tear_sheet
+pdf_path = create_professional_tear_sheet(
+    list(enhanced_results.values()), sweep_tags, config
+)
+
+print(f"📊 Professional analysis complete!")
+print(f"📄 PDF Report: {pdf_path}")
+print(f"📈 Best Strategy: {stats_df.loc['sharpe'].idxmax()}")
+print(f"🎯 Best Benchmark: {stats_df.loc['best_benchmark', sweep_tags[0]]}")
+print(f"💰 Excess Return: {stats_df.loc['best_excess_return', sweep_tags[0]]:.2%}")
+```
+
+**Key Features Demonstrated:**
+- ✅ **Extended Data Coverage**: 15+ years (2010-present) 
+- ✅ **Professional Benchmarking**: Information ratios vs buy-and-hold/zero-return
+- ✅ **Multiple Position Strategies**: Binary, quartile, proportional sizing
+- ✅ **PDF Tear Sheets**: Publication-quality performance reports
+- ✅ **Comprehensive Metrics**: Sharpe ratios, drawdowns, leverage analysis
 ```
 
 See `notebooks/03_full_research_cycle.ipynb` for a complete implementation.
 
+## Professional Benchmarking Framework
+
+The framework includes a sophisticated benchmarking system that compares your strategies against standard financial benchmarks:
+
+### Benchmark Types
+- **Buy-and-Hold**: Pure buy-and-hold of target ETF (e.g., SPY)
+- **Zero Return**: Cash equivalent (risk-free baseline)
+- **Custom Benchmarks**: Market indices, sector ETFs, risk parity strategies
+
+### Benchmark Metrics
+- **Information Ratio**: Risk-adjusted excess return vs benchmark
+- **Excess Return**: Annualized outperformance (strategy return - benchmark return)
+- **Tracking Error**: Volatility of excess returns
+- **Best Benchmark Selection**: Automatically identifies optimal comparison benchmark
+
+### Configuration Example
+```python
+from src.single_target_simulator import SingleTargetBenchmarkConfig, SingleTargetBenchmarkManager
+
+# Configure benchmarking parameters
+benchmark_config = SingleTargetBenchmarkConfig(
+    include_transaction_costs=True,
+    rebalancing_frequency='daily'  # 'daily', 'weekly', 'monthly'
+)
+
+# Initialize benchmark manager
+benchmark_manager = SingleTargetBenchmarkManager(
+    target_etf='SPY',
+    feature_etfs=['XLK', 'XLF', 'XLV'],
+    config=benchmark_config
+)
+```
+
+### PDF Tear Sheet Output
+The framework generates professional tear sheets including:
+- **Strategy Performance Table**: Returns, Sharpe ratios, max drawdown
+- **Best Benchmark Analysis**: Optimal benchmark for each strategy
+- **Excess Return Metrics**: Outperformance vs benchmarks
+- **Information Ratios**: Risk-adjusted performance comparison
+
 ## Student Exercises & Capstone Ideas
 
 ### Beginner Exercises
-1. **Volatility Targeting**: Implement position sizing based on realized volatility
-2. **Feature Engineering**: Add momentum indicators and technical analysis features
-3. **Model Comparison**: Compare Ridge, Random Forest, and Linear models using xarray coordinates
+1. **Custom Benchmarking**: Create sector-specific benchmarks (e.g., technology vs QQQ)
+2. **Position Sizing Extensions**: Implement volatility-adjusted position sizing
+3. **Feature Engineering**: Add momentum indicators and technical analysis features
+4. **Model Comparison**: Compare Ridge, Random Forest, and Linear models using performance metrics
+
+### Intermediate Projects  
+1. **Multi-Timeframe Analysis**: Compare daily vs weekly vs monthly rebalancing strategies
+2. **Rolling vs Expanding Windows**: Analyze training window impacts on performance
+3. **Benchmark Sensitivity**: Test strategy robustness across different benchmark periods
+4. **Risk-Adjusted Metrics**: Implement Calmar ratio, Sortino ratio, and other advanced metrics
 
 ### Advanced Capstone Projects
-1. **Regime Detection**: Implement bull/bear market switching using hidden Markov models
-2. **Transaction Costs**: Add realistic trading costs and slippage to backtests
-3. **Risk Management**: Implement VaR-based position limits and drawdown controls
-4. **Alternative Data**: Integrate sentiment analysis or economic indicators
+1. **Regime Detection**: Implement bull/bear market switching using hidden Markov models with benchmark-aware transitions
+2. **Transaction Cost Integration**: Add realistic trading costs to benchmark comparisons
+3. **Multi-Asset Benchmarking**: Extend single-target benchmarking to portfolio-level analysis  
+4. **Alternative Data Integration**: Incorporate sentiment analysis or economic indicators with benchmark validation
+5. **Publication-Quality Research**: Generate academic-style performance attribution analysis
 5. **Portfolio Optimization**: Apply Modern Portfolio Theory for asset allocation
 
 ## Performance Expectations
