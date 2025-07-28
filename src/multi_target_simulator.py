@@ -111,15 +111,15 @@ def load_simulation_results(simulation_hash, tag):
     
     return None
 
-def generate_train_predict_calendar_with_frequency(X, window_type='expanding', window_size=400, train_frequency='weekly'):
+def generate_train_predict_calendar_with_frequency(X, train_frequency, window_type, window_size):
     """
     Enhanced calendar generation with configurable training frequency.
     
     Args:
         X: Feature DataFrame
-        window_type: 'expanding' or 'rolling'
-        window_size: Size of training window
-        train_frequency: 'daily', 'weekly', 'monthly' - how often to retrain
+        train_frequency: 'daily', 'weekly', 'monthly' - how often to retrain (required)
+        window_type: 'expanding' or 'rolling' (required)
+        window_size: Size of training window (required)
     
     Returns:
         List of (train_start, train_end, predict_date) tuples
@@ -693,23 +693,23 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
     return df
 
 
-def Simulate_MultiTarget(X, y_multi, window_size=400, window_type='expanding', 
+def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type, 
                         pipe_steps={}, param_grid={}, tag=None, position_func=None, position_params=[], 
-                        train_frequency='daily', use_cache=True):
+                        use_cache=None):
     """
     Multi-target walk-forward simulation engine with caching and configurable training frequency.
     
     Args:
         X: Feature DataFrame
         y_multi: Multi-target DataFrame (multiple ETF returns)
-        window_size: Training window size
-        window_type: 'expanding' or 'rolling'
+        train_frequency: 'daily', 'weekly', 'monthly' - how often to retrain model (required)
+        window_size: Training window size (required)
+        window_type: 'expanding' or 'rolling' (required)
         pipe_steps: Pipeline steps for the model
         param_grid: Parameters for the model
         tag: Label for this simulation run
         position_func: Function to convert predictions to positions
         position_params: Parameters for position function
-        train_frequency: 'daily', 'weekly', 'monthly' - how often to retrain model
         use_cache: Whether to use cached results if available
     
     Returns:
@@ -734,7 +734,7 @@ def Simulate_MultiTarget(X, y_multi, window_size=400, window_type='expanding',
     
     # Use enhanced calendar generation with training frequency
     date_ranges = generate_train_predict_calendar_with_frequency(
-        X, window_type=window_type, window_size=window_size, train_frequency=train_frequency
+        X, train_frequency, window_type, window_size
     )
 
     if not date_ranges:
@@ -1004,7 +1004,10 @@ def main():
     """
     # Configuration
     config = {
-        'train_frequency': 'weekly',  # 'daily', 'weekly', 'monthly'
+        'train_frequency': 'monthly',  # 'daily', 'weekly', 'monthly'
+        'window_size': 400,  # Training window size
+        'window_type': 'expanding',  # 'expanding' or 'rolling'
+        'start_date': '2015-01-01',  # Data start date
         'use_cache': True,
         'force_retrain': False,
         'csv_output_dir': '/Volumes/ext_2t/ERM3_Data/stock_data/csv'  # External drive CSV directory
@@ -1032,14 +1035,14 @@ def main():
     X, y_multi = load_and_prepare_multi_target_data(
         etf_list=all_etfs, 
         target_etfs=target_etfs,
-        start_date='2015-01-01'
+        start_date=config['start_date']
     )
     
     # Strategy sweep configuration
     models = {
         'linear': {'regressor': LinearRegression()},
         'ridge': {'regressor': Ridge(alpha=1.0)},
-        'random_forest': {'regressor': MultiOutputRegressor(RandomForestRegressor(n_estimators=50, random_state=42))}
+        'random_forest': {'regressor': MultiOutputRegressor(RandomForestRegressor(n_estimators=20, random_state=42))}
     }
     
     scalers = {'std': StandardScaler(), 'none': None}
@@ -1080,15 +1083,14 @@ def main():
         
         try:
             regout_df = Simulate_MultiTarget(
-                X, y_multi,
-                window_size=400,
-                window_type='expanding',
+                X, y_multi, config['train_frequency'],
+                window_size=config['window_size'],
+                window_type=config['window_type'],
                 pipe_steps=strategy['pipe_steps'],
                 param_grid=strategy['param_grid'],
                 tag=strategy['tag'],
                 position_func=strategy['position_func'],
                 position_params=strategy['position_params'],
-                train_frequency=config['train_frequency'],
                 use_cache=config['use_cache']
             )
             
