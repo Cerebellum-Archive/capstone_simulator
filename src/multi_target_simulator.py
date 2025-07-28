@@ -41,12 +41,47 @@ from scipy.stats import norm
 from IPython.display import display
 import pickle
 import hashlib
+from abc import ABC, abstractmethod
+from typing import List, Tuple, Any
+from dataclasses import dataclass
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
+TRADING_DAYS_PER_YEAR = 252
+QUARTERLY_WINDOW_DAYS = 63
+MONTHLY_RETRAIN_DAYS = 21
+WEEKLY_RETRAIN_DAYS = 5
+DAILY_RETRAIN_DAYS = 1
+BASE_LEVERAGE_DEFAULT = 1.0
+MAX_LEVERAGE_DEFAULT = 2.0
+LONG_SHORT_LEVERAGE_DEFAULT = 1.0
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation parameters."""
+    train_frequency: str = 'monthly'
+    window_size: int = 400
+    window_type: str = 'expanding'
+    start_date: str = '2015-01-01'
+    use_cache: bool = True
+    force_retrain: bool = False
+    csv_output_dir: str = '/Volumes/ext_2t/ERM3_Data/stock_data/csv'
+    
+    def __post_init__(self):
+        if self.train_frequency not in ['daily', 'weekly', 'monthly']:
+            raise ValueError(f"Invalid train_frequency: {self.train_frequency}")
+        if self.window_type not in ['expanding', 'rolling']:
+            raise ValueError(f"Invalid window_type: {self.window_type}")
 
 # Scikit-learn and statsmodels
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error as rmse, mean_absolute_error as mae, r2_score
-from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.linear_model import LinearRegression, Ridge, HuberRegressor, ElasticNet
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
@@ -128,12 +163,12 @@ def generate_train_predict_calendar_with_frequency(X, train_frequency, window_ty
     date_ranges = []
     
     # Determine retraining frequency
-    if train_frequency == 'weekly':
-        retrain_step = 5  # Retrain every 5 business days
-    elif train_frequency == 'monthly':
-        retrain_step = 21  # Retrain every ~21 business days (monthly)
-    else:  # 'daily'
-        retrain_step = 1
+    frequency_map = {
+        'weekly': WEEKLY_RETRAIN_DAYS,
+        'monthly': MONTHLY_RETRAIN_DAYS,
+        'daily': DAILY_RETRAIN_DAYS
+    }
+    retrain_step = frequency_map.get(train_frequency, DAILY_RETRAIN_DAYS)
     
     # Generate prediction dates based on frequency
     prediction_indices = list(range(window_size, len(dates), retrain_step))
@@ -158,28 +193,106 @@ def generate_train_predict_calendar_with_frequency(X, train_frequency, window_ty
     return date_ranges
 
 
-# --- Multi-Target Position Sizing Functions ---
+# --- Position Sizing Strategy Pattern ---
 
-def calculate_individual_position_weights(predictions_row, position_func, position_params):
-    """
-    Calculate individual position weights for each asset given predictions.
+class PositionSizer(ABC):
+    """Abstract base class for position sizing strategies."""
     
-    Args:
-        predictions_row: Series with predictions for each target
-        position_func: Position sizing function
-        position_params: Parameters for position function
+    def __init__(self, params: List[float] = None):
+        self.params = params or []
     
-    Returns:
-        numpy array with individual weights for each asset
-    """
-    if position_func.__name__ == 'L_func_multi_target_long_short':
-        # Replicate the long-short logic to get individual weights
-        ranked = predictions_row.rank(ascending=False)
-        n_assets = len(predictions_row)
-        base_leverage = position_params[0] if position_params else 1.0
+    @abstractmethod
+    def calculate_weights(self, predictions: pd.Series) -> np.ndarray:
+        """Calculate individual position weights for each asset.
+        
+        Args:
+            predictions: Series with predictions for each target
+            
+        Returns:
+            numpy array with individual weights for each asset
+        """
+        pass
+    
+    @abstractmethod
+    def calculate_portfolio_leverage(self, predictions_df: pd.DataFrame) -> pd.Series:
+        """Calculate portfolio-level leverage for each date.
+        
+        Args:
+            predictions_df: DataFrame with predictions for each target
+            
+        Returns:
+            Series with portfolio leverage for each date
+        """
+        pass
+
+class EqualWeightSizer(PositionSizer):
+    """Equal-weight position sizing across all predicted targets."""
+    
+    def calculate_weights(self, predictions: pd.Series) -> np.ndarray:
+        if predictions.isna().all():
+            return np.zeros(len(predictions))
+        
+        predictions = predictions.fillna(0)
+        base_leverage = self.params[0] if self.params else BASE_LEVERAGE_DEFAULT
+        avg_prediction = predictions.mean()
+        n_assets = len(predictions)
+        
+        if avg_prediction > 0:
+            weights = np.full(n_assets, base_leverage / n_assets)
+        else:
+            weights = np.full(n_assets, -base_leverage / n_assets)
+            
+        return weights
+    
+    def calculate_portfolio_leverage(self, predictions_df: pd.DataFrame) -> pd.Series:
+        base_leverage = self.params[0] if self.params else BASE_LEVERAGE_DEFAULT
+        avg_prediction = predictions_df.mean(axis=1)
+        leverage = np.where(avg_prediction > 0, base_leverage, -base_leverage)
+        return pd.Series(leverage, index=predictions_df.index)
+
+class ConfidenceWeightedSizer(PositionSizer):
+    """Confidence-weighted position sizing based on prediction magnitude."""
+    
+    def calculate_weights(self, predictions: pd.Series) -> np.ndarray:
+        if predictions.isna().all():
+            return np.zeros(len(predictions))
+        
+        predictions = predictions.fillna(0)
+        base_leverage = self.params[0] if self.params else MAX_LEVERAGE_DEFAULT
+        confidence = predictions.abs()
+        avg_prediction = predictions.mean()
+        
+        if confidence.sum() > 0:
+            confidence_normalized = confidence / confidence.sum()
+            weights = np.sign(avg_prediction) * confidence_normalized * base_leverage
+        else:
+            weights = np.zeros(len(predictions))
+            
+        return weights
+    
+    def calculate_portfolio_leverage(self, predictions_df: pd.DataFrame) -> pd.Series:
+        max_leverage = self.params[0] if self.params else MAX_LEVERAGE_DEFAULT
+        confidence = predictions_df.abs().mean(axis=1)
+        avg_prediction = predictions_df.mean(axis=1)
+        confidence_normalized = confidence.rank(pct=True)
+        leverage = np.sign(avg_prediction) * confidence_normalized * max_leverage
+        return pd.Series(leverage, index=predictions_df.index)
+
+class LongShortSizer(PositionSizer):
+    """Long-short position sizing: long best predictions, short worst."""
+    
+    def calculate_weights(self, predictions: pd.Series) -> np.ndarray:
+        if predictions.isna().all():
+            return np.zeros(len(predictions))
+        
+        predictions = predictions.fillna(0)
+        base_leverage = self.params[0] if self.params else LONG_SHORT_LEVERAGE_DEFAULT
+        
+        ranked = predictions.rank(ascending=False)
+        n_assets = len(predictions)
         
         if n_assets == 1:
-            weights = np.array([base_leverage if predictions_row.iloc[0] > 0 else -base_leverage])
+            weights = np.array([base_leverage if predictions.iloc[0] > 0 else -base_leverage])
         elif n_assets == 2:
             long_mask = ranked == 1
             weights = np.where(long_mask, base_leverage/2, -base_leverage/2)
@@ -209,37 +322,38 @@ def calculate_individual_position_weights(predictions_row, position_func, positi
                 
         return weights
     
+    def calculate_portfolio_leverage(self, predictions_df: pd.DataFrame) -> pd.Series:
+        base_leverage = self.params[0] if self.params else LONG_SHORT_LEVERAGE_DEFAULT
+        portfolio_returns = []
+        
+        for _, row in predictions_df.iterrows():
+            weights = self.calculate_weights(row)
+            portfolio_returns.append(weights.sum())
+        
+        return pd.Series(portfolio_returns, index=predictions_df.index)
+
+# --- Legacy Position Sizing Functions (for backward compatibility) ---
+
+def calculate_individual_position_weights(predictions_row, position_func, position_params):
+    """Legacy wrapper for backward compatibility."""
+    # Convert to new strategy pattern
+    if position_func.__name__ == 'L_func_multi_target_long_short':
+        sizer = LongShortSizer(position_params)
     elif position_func.__name__ == 'L_func_multi_target_confidence_weighted':
-        # For confidence weighted: distribute leverage across all assets based on confidence
-        base_leverage = position_params[0] if position_params else 2.0
-        confidence = predictions_row.abs()
-        avg_prediction = predictions_row.mean()
-        
-        if confidence.sum() > 0:
-            confidence_normalized = confidence / confidence.sum()
-            weights = np.sign(avg_prediction) * confidence_normalized * base_leverage
-        else:
-            weights = np.zeros(len(predictions_row))
-            
-        return weights
-    
+        sizer = ConfidenceWeightedSizer(position_params)
     elif position_func.__name__ == 'L_func_multi_target_equal_weight':
-        # For equal weight: same weight for all assets based on average prediction
-        base_leverage = position_params[0] if position_params else 1.0
-        avg_prediction = predictions_row.mean()
-        n_assets = len(predictions_row)
-        
-        if avg_prediction > 0:
-            weights = np.full(n_assets, base_leverage / n_assets)
-        else:
-            weights = np.full(n_assets, -base_leverage / n_assets)
-            
-        return weights
-    
+        sizer = EqualWeightSizer(position_params)
     else:
-        # Fallback: equal weights
-        n_assets = len(predictions_row)
-        return np.full(n_assets, 1.0 / n_assets)
+        sizer = EqualWeightSizer([1.0])
+    
+    if predictions_row is None or len(predictions_row) == 0:
+        logger.warning("Empty predictions_row in calculate_individual_position_weights")
+        return np.array([])
+    
+    if not isinstance(predictions_row, pd.Series):
+        predictions_row = pd.Series(predictions_row)
+    
+    return sizer.calculate_weights(predictions_row)
 
 def L_func_multi_target_equal_weight(predictions_df, params=[]):
     """
@@ -376,9 +490,7 @@ def plot_individual_target_performance(regout_list, sweep_tags, target_etfs, con
     os.makedirs('reports', exist_ok=True)
     
     for target in target_etfs:
-        plt.figure(figsize=(15, 12))
-        
-        # Create 3 subplots for each target
+        # Create figure with subplots
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12))
         
         # --- Subplot 1: Cumulative Returns Comparison ---
@@ -389,17 +501,26 @@ def plot_individual_target_performance(regout_list, sweep_tags, target_etfs, con
             if f'actual_{target}' in regout_df.columns:
                 # Strategy return: leverage * actual target return
                 strategy_ret = regout_df['leverage'] * regout_df[f'actual_{target}']
-                strategy_ret.cumsum().plot(ax=ax1, label=f'{tag} Strategy', alpha=0.7)
+                cumulative_strategy = strategy_ret.cumsum()
+                ax1.plot(cumulative_strategy.index, cumulative_strategy.values, 
+                        label=f'{tag} Strategy', alpha=0.7, linewidth=2)
         
         # Buy & Hold benchmark (1.0 leverage)
         if regout_list and f'actual_{target}' in regout_list[0].columns:
             buy_hold_ret = regout_list[0][f'actual_{target}']
-            buy_hold_ret.cumsum().plot(ax=ax1, label=f'{target} Buy & Hold (1.0x)', 
-                                     linestyle='--', linewidth=3, color='black')
+            buy_hold_cumulative = buy_hold_ret.cumsum()
+            ax1.plot(buy_hold_cumulative.index, buy_hold_cumulative.values, 
+                    label=f'{target} Buy & Hold (1.0x)', 
+                    linestyle='--', linewidth=3, color='black')
         
         ax1.set_ylabel('Cumulative Log-Return')
+        ax1.set_xlabel('Date')
         ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax1.grid(True, alpha=0.3)
+        
+        # Add axis lines
+        ax1.axhline(y=0, color='black', linewidth=0.5, alpha=0.5)
+        ax1.axvline(x=ax1.get_xlim()[0], color='black', linewidth=0.5, alpha=0.5)
         
         # --- Subplot 2: Rolling Sharpe Ratio (252-day window) ---
         ax2.set_title(f'{target} - Rolling Sharpe Ratio (252-day window)', fontsize=12)
@@ -408,14 +529,16 @@ def plot_individual_target_performance(regout_list, sweep_tags, target_etfs, con
             if f'actual_{target}' in regout_df.columns:
                 strategy_ret = regout_df['leverage'] * regout_df[f'actual_{target}']
                 rolling_sharpe = strategy_ret.rolling(252).mean() / strategy_ret.rolling(252).std() * np.sqrt(252)
-                rolling_sharpe.plot(ax=ax2, label=f'{tag} Strategy', alpha=0.7)
+                ax2.plot(rolling_sharpe.index, rolling_sharpe.values, 
+                        label=f'{tag} Strategy', alpha=0.7, linewidth=2)
         
         # Buy & Hold rolling Sharpe
         if regout_list and f'actual_{target}' in regout_list[0].columns:
             buy_hold_ret = regout_list[0][f'actual_{target}']
             bh_rolling_sharpe = buy_hold_ret.rolling(252).mean() / buy_hold_ret.rolling(252).std() * np.sqrt(252)
-            bh_rolling_sharpe.plot(ax=ax2, label=f'{target} Buy & Hold', 
-                                 linestyle='--', linewidth=2, color='black')
+            ax2.plot(bh_rolling_sharpe.index, bh_rolling_sharpe.values, 
+                    label=f'{target} Buy & Hold', 
+                    linestyle='--', linewidth=2, color='black')
         
         ax2.axhline(y=0, color='red', linestyle='-', alpha=0.5)
         ax2.set_ylabel('Rolling Sharpe Ratio')
@@ -431,7 +554,8 @@ def plot_individual_target_performance(regout_list, sweep_tags, target_etfs, con
                 cum_ret = strategy_ret.cumsum()
                 running_max = cum_ret.expanding().max()
                 drawdown = cum_ret - running_max
-                drawdown.plot(ax=ax3, label=f'{tag} Strategy', alpha=0.7)
+                ax3.plot(drawdown.index, drawdown.values, 
+                        label=f'{tag} Strategy', alpha=0.7, linewidth=2)
         
         # Buy & Hold drawdown
         if regout_list and f'actual_{target}' in regout_list[0].columns:
@@ -439,8 +563,9 @@ def plot_individual_target_performance(regout_list, sweep_tags, target_etfs, con
             bh_cum_ret = buy_hold_ret.cumsum()
             bh_running_max = bh_cum_ret.expanding().max()
             bh_drawdown = bh_cum_ret - bh_running_max
-            bh_drawdown.plot(ax=ax3, label=f'{target} Buy & Hold', 
-                           linestyle='--', linewidth=2, color='black')
+            ax3.plot(bh_drawdown.index, bh_drawdown.values, 
+                    label=f'{target} Buy & Hold', 
+                    linestyle='--', linewidth=2, color='black')
         
         ax3.axhline(y=0, color='red', linestyle='-', alpha=0.5)
         ax3.set_ylabel('Drawdown (Log-Return)')
@@ -560,12 +685,12 @@ def create_performance_summary_table(regout_list, sweep_tags, target_etfs):
                 buy_hold_ret = regout_df[f'actual_{target}']
                 
                 # Calculate metrics
-                strategy_annual_ret = strategy_ret.mean() * 252
-                strategy_annual_vol = strategy_ret.std() * np.sqrt(252)
+                strategy_annual_ret = strategy_ret.mean() * TRADING_DAYS_PER_YEAR
+                strategy_annual_vol = strategy_ret.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
                 strategy_sharpe = strategy_annual_ret / strategy_annual_vol if strategy_annual_vol != 0 else np.nan
                 
-                buy_hold_annual_ret = buy_hold_ret.mean() * 252
-                buy_hold_annual_vol = buy_hold_ret.std() * np.sqrt(252)
+                buy_hold_annual_ret = buy_hold_ret.mean() * TRADING_DAYS_PER_YEAR
+                buy_hold_annual_vol = buy_hold_ret.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
                 buy_hold_sharpe = buy_hold_annual_ret / buy_hold_annual_vol if buy_hold_annual_vol != 0 else np.nan
                 
                 # Maximum drawdown
@@ -621,8 +746,8 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
         reg_out = regout_list[n].loc[trange, :]
 
         # Portfolio-level metrics
-        mean_ret = 252 * reg_out.portfolio_ret.mean()
-        std_ret = (np.sqrt(252)) * reg_out.portfolio_ret.std()
+        mean_ret = TRADING_DAYS_PER_YEAR * reg_out.portfolio_ret.mean()
+        std_ret = (np.sqrt(TRADING_DAYS_PER_YEAR)) * reg_out.portfolio_ret.std()
         sharpe = mean_ret / std_ret if std_ret != 0 else np.nan
 
         df.loc['portfolio_return', testlabel] = mean_ret
@@ -656,8 +781,8 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
 
         # Benchmark comparison (equal-weight portfolio of all targets)
         if 'benchmark_ret' in reg_out.columns:
-            bench_ret = 252 * reg_out.benchmark_ret.mean()
-            bench_std = (np.sqrt(252)) * reg_out.benchmark_ret.std()
+            bench_ret = TRADING_DAYS_PER_YEAR * reg_out.benchmark_ret.mean()
+            bench_std = (np.sqrt(TRADING_DAYS_PER_YEAR)) * reg_out.benchmark_ret.std()
             df.loc['benchmark_return', testlabel] = bench_ret
             df.loc['benchmark_std', testlabel] = bench_std
             df.loc['benchmark_sharpe', testlabel] = bench_ret / bench_std if bench_std != 0 else np.nan
@@ -667,31 +792,206 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
         df.loc['author', testlabel] = author
         df.loc['n_targets', testlabel] = len(target_etfs)
 
-        # Generate QuantStats report for portfolio
-        if qs:
-            os.makedirs('reports', exist_ok=True)
-            report_filename = f'reports/{testlabel}_multi_target_report.html'
-            print(f"\n--- Generating Multi-Target QuantStats report for: {testlabel} ---")
-            print(f"    To view, open the file: {report_filename}")
-            try:
-                returns = reg_out['portfolio_ret']
-                benchmark = reg_out['benchmark_ret'] if 'benchmark_ret' in reg_out.columns else None
+        # QuantStats reports disabled - using tear sheet instead
+        # if qs:
+        #     os.makedirs('reports', exist_ok=True)
+        #     report_filename = f'reports/{testlabel}_multi_target_report.html'
+        #     print(f"\n--- Generating Multi-Target QuantStats report for: {testlabel} ---")
+        #     print(f"    To view, open the file: {report_filename}")
+        #     try:
+        #         returns = reg_out['portfolio_ret']
+        #         benchmark = reg_out['benchmark_ret'] if 'benchmark_ret' in reg_out.columns else None
 
-                full_date_range = pd.date_range(start=returns.index.min(), end=returns.index.max(), freq='D')
-                daily_returns = returns.reindex(full_date_range).fillna(0)
+        #         # Ensure returns are properly formatted for QuantStats
+        #         if len(returns) == 0:
+        #             print(f"Skipping QuantStats report for {testlabel}: No returns data")
+        #             continue
                 
-                if benchmark is not None:
-                    daily_benchmark = benchmark.reindex(full_date_range).fillna(0)
-                    qs.reports.html(daily_returns, benchmark=daily_benchmark,
-                                          output=report_filename, title=f'{testlabel} Multi-Target Performance')
-                else:
-                    qs.reports.html(daily_returns, output=report_filename, 
-                                          title=f'{testlabel} Multi-Target Performance')
-            except Exception as e:
-                print(f"Could not generate QuantStats report for {testlabel}: {e}")
+        #         # Convert to pandas Series if needed and ensure proper index
+        #         if not isinstance(returns, pd.Series):
+        #             returns = pd.Series(returns)
+                
+        #         # Create daily date range and reindex
+        #         full_date_range = pd.date_range(start=returns.index.min(), end=returns.index.max(), freq='D')
+        #         daily_returns = returns.reindex(full_date_range).fillna(0)
+                
+        #         # Ensure we have valid data
+        #         if daily_returns.isna().all() or (daily_returns == 0).all():
+        #             print(f"Skipping QuantStats report for {testlabel}: No valid returns data")
+        #             continue
+                
+        #         if benchmark is not None:
+        #             daily_benchmark = benchmark.reindex(full_date_range).fillna(0)
+        #             qs.reports.html(daily_returns, benchmark=daily_benchmark,
+        #                                   output=report_filename, title=f'{testlabel} Multi-Target Performance')
+        #         else:
+        #             qs.reports.html(daily_returns, output=report_filename, 
+        #                                   title=f'{testlabel} Multi-Target Performance')
+        #     except Exception as e:
+        #         print(f"Could not generate QuantStats report for {testlabel}: {e}")
+        #         print(f"    Returns data shape: {returns.shape if 'returns' in locals() else 'N/A'}")
+        #         print(f"    Returns data sample: {returns.head() if 'returns' in locals() else 'N/A'}")
 
     return df
 
+
+def _prepare_training_data(X: pd.DataFrame, y_multi: pd.DataFrame, 
+                          start_training: pd.Timestamp, end_training: pd.Timestamp) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Prepare and validate training data."""
+    fit_X = X[start_training:end_training]
+    fit_y = y_multi[start_training:end_training]
+    
+    # Validate training data
+    if fit_X.isna().any().any():
+        logger.warning(f"NaN values found in training features, filling with zeros")
+        fit_X = fit_X.fillna(0)
+    
+    if fit_y.isna().any().any():
+        logger.warning(f"NaN values found in training targets, filling with zeros")
+        fit_y = fit_y.fillna(0)
+    
+    return fit_X, fit_y
+
+def _train_model(fit_obj, fit_X: pd.DataFrame, fit_y: pd.DataFrame, 
+                prediction_date: pd.Timestamp) -> Any:
+    """Train the model with error handling."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter(action='ignore')
+            fit_obj.fit(fit_X, fit_y)
+        
+        # Validate model training
+        test_pred = fit_obj.predict(fit_X.iloc[:1])
+        if np.isnan(test_pred).any():
+            logger.warning(f"Model producing NaN predictions after training for date {prediction_date.date()}")
+            # Try refitting with different approach
+            from sklearn.pipeline import Pipeline
+            fit_obj = Pipeline(fit_obj.steps)
+            fit_obj.fit(fit_X.fillna(0), fit_y.fillna(0))
+        
+        return fit_obj
+        
+    except Exception as e:
+        logger.error(f"Error training model for date {prediction_date.date()}: {str(e)}")
+        # Fallback to simple model
+        from sklearn.linear_model import LinearRegression
+        fallback_model = LinearRegression()
+        fallback_model.fit(fit_X.fillna(0), fit_y.fillna(0))
+        return fallback_model
+
+def _make_predictions(model, pred_X: pd.DataFrame, target_cols: List[str], 
+                     prediction_date: pd.Timestamp) -> np.ndarray:
+    """Make predictions with error handling."""
+    # Validate prediction input
+    if pred_X.isna().any().any():
+        logger.warning(f"NaN values in prediction input for date {prediction_date.date()}")
+        pred_X = pred_X.fillna(0)
+    
+    try:
+        predictions = model.predict(pred_X)
+    except Exception as e:
+        logger.error(f"Error making prediction for date {prediction_date.date()}: {str(e)}")
+        # Use zero predictions as fallback
+        predictions = np.zeros((1, len(target_cols)))
+    
+    # Handle different prediction formats
+    if hasattr(predictions, 'values'):
+        pred_values = predictions.values[0]
+    else:
+        pred_values = predictions[0] if predictions.ndim > 1 else predictions
+
+    # Ensure pred_values is a 1D array with correct length
+    if isinstance(pred_values, (list, tuple)):
+        pred_values = np.array(pred_values)
+    
+    # Check for NaN predictions and replace with zeros
+    if np.isnan(pred_values).any():
+        logger.debug(f"NaN predictions detected for date {prediction_date.date()}, replacing with zeros")
+        pred_values = np.nan_to_num(pred_values, nan=0.0)
+    
+    # Debug: check prediction shape
+    if len(pred_values) != len(target_cols):
+        logger.warning(f"Prediction length {len(pred_values)} != target count {len(target_cols)}")
+        # Try to handle this gracefully
+        if len(pred_values) > len(target_cols):
+            pred_values = pred_values[:len(target_cols)]
+        elif len(pred_values) < len(target_cols):
+            # Pad with zeros if too short
+            pred_values = np.pad(pred_values, (0, len(target_cols) - len(pred_values)), 'constant')
+
+    return pred_values
+
+def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str], 
+                               position_func, position_params: List[float]) -> pd.DataFrame:
+    """Calculate portfolio returns using individual asset weights."""
+    logger.info("Calculating portfolio returns using individual asset contributions...")
+    
+    # Create predictions DataFrame for position sizing
+    pred_cols = [f'pred_{target}' for target in target_cols]
+    predictions_df = regout[pred_cols].copy()
+    predictions_df.columns = target_cols  # Remove 'pred_' prefix for position function
+
+    # Create actual returns DataFrame
+    actual_cols = [f'actual_{target}' for target in target_cols]
+    actual_returns = regout[actual_cols].copy()
+    actual_returns.columns = target_cols  # Remove 'actual_' prefix
+
+    portfolio_returns = []
+    for date in regout.index:
+        if date in predictions_df.index:
+            # Get predictions for this date
+            pred_row = predictions_df.loc[date]
+            
+            # Calculate individual position weights
+            if position_func:
+                weights = calculate_individual_position_weights(pred_row, position_func, position_params)
+            else:
+                # Default equal weight
+                avg_prediction = pred_row.mean()
+                n_assets = len(pred_row)
+                if avg_prediction > 0:
+                    weights = np.full(n_assets, 1.0 / n_assets)
+                else:
+                    weights = np.full(n_assets, -1.0 / n_assets)
+            
+            # Ensure weights and asset_returns have same length
+            asset_returns = actual_returns.loc[date].values
+            if len(weights) != len(asset_returns):
+                logger.warning(f"Weight length {len(weights)} != asset returns length {len(asset_returns)}")
+                # Pad or truncate to match
+                min_len = min(len(weights), len(asset_returns))
+                weights = weights[:min_len]
+                asset_returns = asset_returns[:min_len]
+            
+            # Calculate weighted return for this date
+            portfolio_return = np.sum(weights * asset_returns)
+            portfolio_returns.append(portfolio_return)
+        else:
+            portfolio_returns.append(0.0)
+    
+    regout['portfolio_ret'] = portfolio_returns
+    
+    # Legacy leverage column for backward compatibility (sum of weights)
+    if position_func:
+        regout['leverage'] = position_func(predictions_df, position_params)
+    else:
+        regout['leverage'] = L_func_multi_target_equal_weight(predictions_df, [1.0])
+    
+    # Store individual asset weights for analysis (optional)
+    if position_func and position_func.__name__ == 'L_func_multi_target_long_short':
+        # For long-short strategies, also store individual weights for debugging
+        for i, target in enumerate(target_cols):
+            weight_series = []
+            for date in regout.index:
+                if date in predictions_df.index:
+                    pred_row = predictions_df.loc[date]
+                    weights = calculate_individual_position_weights(pred_row, position_func, position_params)
+                    weight_series.append(weights[i])
+                else:
+                    weight_series.append(0.0)
+            regout[f'weight_{target}'] = weight_series
+    
+    return regout
 
 def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type, 
                         pipe_steps={}, param_grid={}, tag=None, position_func=None, position_params=[], 
@@ -738,18 +1038,18 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     )
 
     if not date_ranges:
-        print(f"\nWarning: Not enough data for multi-target simulation '{tag}' with window size {window_size}.")
-        print(f"    Required data points: >{window_size}, Data points available: {len(X)}")
+        logger.warning(f"Not enough data for multi-target simulation '{tag}' with window size {window_size}")
+        logger.warning(f"Required data points: >{window_size}, Data points available: {len(X)}")
         return pd.DataFrame()
 
     # Set up multi-target pipeline
     fit_obj = Pipeline(steps=pipe_steps)
     fit_obj.set_params(**param_grid)
 
-    print(f"Starting multi-target simulation for tag: {tag}...")
-    print(f"    Predicting targets: {target_cols}")
-    print(f"    Training frequency: {train_frequency}")
-    print(f"    Total training iterations: {len(date_ranges)} (vs {len(X)-window_size} for daily)")
+    logger.info(f"Starting multi-target simulation for tag: {tag}")
+    logger.info(f"Predicting targets: {target_cols}")
+    logger.info(f"Training frequency: {train_frequency}")
+    logger.info(f"Total training iterations: {len(date_ranges)} (vs {len(X)-window_size} for daily)")
     
     last_trained_model = None
     last_training_end = None
@@ -762,32 +1062,24 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
                        last_training_end != end_training)
         
         if need_retrain:
-            fit_X = X[start_training:end_training]
-            fit_y = y_multi[start_training:end_training]
+            fit_X, fit_y = _prepare_training_data(X, y_multi, start_training, end_training)
             
             if n % max(1, len(date_ranges)//10) == 0:  # Progress update
-                print(f"  ... training model for date {prediction_date.date()} ({n+1}/{len(date_ranges)})")
+                logger.info(f"Training model for date {prediction_date.date()} ({n+1}/{len(date_ranges)})")
 
-            with warnings.catch_warnings():
-                warnings.simplefilter(action='ignore')
-                fit_obj.fit(fit_X, fit_y)
-            
-            last_trained_model = fit_obj
+            last_trained_model = _train_model(fit_obj, fit_X, fit_y, prediction_date)
             last_training_end = end_training
         
         # Make prediction using current model
         pred_X = X[prediction_date:prediction_date]
-        predictions = last_trained_model.predict(pred_X)
-        
-        # Handle different prediction formats
-        if hasattr(predictions, 'values'):
-            pred_values = predictions.values[0]
-        else:
-            pred_values = predictions[0] if predictions.ndim > 1 else predictions
+        pred_values = _make_predictions(last_trained_model, pred_X, target_cols, prediction_date)
 
         # Store predictions for each target
         for i, target in enumerate(target_cols):
-            regout.loc[prediction_date, f'pred_{target}'] = np.round(pred_values[i], 5)
+            if i < len(pred_values):
+                regout.loc[prediction_date, f'pred_{target}'] = np.round(pred_values[i], 5)
+            else:
+                regout.loc[prediction_date, f'pred_{target}'] = 0.0
 
     # Fill in predictions for dates between training points using forward fill
     print(f"  ... filling predictions for all dates using forward fill...")
@@ -806,63 +1098,14 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     predictions_df = regout[pred_cols].copy()
     predictions_df.columns = target_cols  # Remove 'pred_' prefix for position function
 
-    # Calculate portfolio performance - ENHANCED FOR ALL STRATEGY TYPES
-    actual_cols = [f'actual_{target}' for target in target_cols]
-    actual_returns = regout[actual_cols].copy()
-    actual_returns.columns = target_cols  # Remove 'actual_' prefix
-
-    # Calculate portfolio returns using individual asset weights
-    print(f"  ... calculating portfolio returns using individual asset contributions...")
-    
-    portfolio_returns = []
-    for date in regout.index:
-        if date in predictions_df.index:
-            # Get predictions for this date
-            pred_row = predictions_df.loc[date]
-            
-            # Calculate individual position weights
-            if position_func:
-                weights = calculate_individual_position_weights(pred_row, position_func, position_params)
-            else:
-                # Default equal weight
-                avg_prediction = pred_row.mean()
-                n_assets = len(pred_row)
-                if avg_prediction > 0:
-                    weights = np.full(n_assets, 1.0 / n_assets)
-                else:
-                    weights = np.full(n_assets, -1.0 / n_assets)
-            
-            # Calculate weighted return for this date
-            asset_returns = actual_returns.loc[date].values
-            portfolio_return = np.sum(weights * asset_returns)
-            portfolio_returns.append(portfolio_return)
-        else:
-            portfolio_returns.append(0.0)
-    
-    regout['portfolio_ret'] = portfolio_returns
-    
-    # Legacy leverage column for backward compatibility (sum of weights)
-    if position_func:
-        regout['leverage'] = position_func(predictions_df, position_params)
-    else:
-        regout['leverage'] = L_func_multi_target_equal_weight(predictions_df, [1.0])
-    
-    # Store individual asset weights for analysis (optional)
-    if position_func and position_func.__name__ == 'L_func_multi_target_long_short':
-        # For long-short strategies, also store individual weights for debugging
-        for i, target in enumerate(target_cols):
-            weight_series = []
-            for date in regout.index:
-                if date in predictions_df.index:
-                    pred_row = predictions_df.loc[date]
-                    weights = calculate_individual_position_weights(pred_row, position_func, position_params)
-                    weight_series.append(weights[i])
-                else:
-                    weight_series.append(0.0)
-            regout[f'weight_{target}'] = weight_series
+    # Calculate portfolio performance using new helper function
+    regout = _calculate_portfolio_returns(regout, target_cols, position_func, position_params)
 
     # Benchmark: equal-weight buy-and-hold of all targets
-    regout['benchmark_ret'] = actual_returns.mean(axis=1)
+    actual_cols = [f'actual_{target}' for target in target_cols]
+    actual_returns_benchmark = regout[actual_cols].copy()
+    actual_returns_benchmark.columns = target_cols
+    regout['benchmark_ret'] = actual_returns_benchmark.mean(axis=1)
 
     # Remove rows with NaN values
     regout_clean = regout.dropna()
@@ -871,13 +1114,14 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     if use_cache:
         save_simulation_results(regout_clean, simulation_hash, tag)
 
-    print(f"Multi-target simulation for {tag} complete.")
+    logger.info(f"Multi-target simulation for {tag} complete.")
     return regout_clean
 
 
-def load_and_prepare_multi_target_data(etf_list, target_etfs, start_date=None):
+def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[str], 
+                                      start_date: str = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Downloads and prepares data for multi-target regression.
+    Downloads and prepares data for multi-target regression with error handling.
     
     Args:
         etf_list: List of all ETFs to download (features + targets)
@@ -887,13 +1131,27 @@ def load_and_prepare_multi_target_data(etf_list, target_etfs, start_date=None):
     Returns:
         X: Feature DataFrame (all ETFs except targets)
         y_multi: Multi-target DataFrame (target ETFs only)
-    """
-    print(f"Downloading multi-target data from {start_date}...")
-    print(f"    Feature ETFs: {[etf for etf in etf_list if etf not in target_etfs]}")
-    print(f"    Target ETFs: {target_etfs}")
     
-    all_etf_closing_prices_df = yf.download(etf_list, start=start_date)['Close']
-    etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
+    Raises:
+        ValueError: If data download fails or insufficient data
+    """
+    logger.info(f"Downloading multi-target data from {start_date}")
+    logger.info(f"Feature ETFs: {[etf for etf in etf_list if etf not in target_etfs]}")
+    logger.info(f"Target ETFs: {target_etfs}")
+    
+    try:
+        all_etf_closing_prices_df = yf.download(etf_list, start=start_date)['Close']
+        if all_etf_closing_prices_df.empty:
+            raise ValueError("No data downloaded from Yahoo Finance")
+        
+        etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
+        
+        if etf_log_returns_df.empty:
+            raise ValueError("No valid returns data after processing")
+            
+    except Exception as e:
+        logger.error(f"Failed to download data: {str(e)}")
+        raise ValueError(f"Data download failed: {str(e)}")
 
     # Set timezone and align timestamps
     # Handle case where index doesn't have timezone info
@@ -924,9 +1182,24 @@ def load_and_prepare_multi_target_data(etf_list, target_etfs, start_date=None):
     # Create multi-target matrix
     y_multi = etf_targets_df[target_etfs]
     
+    # Validate data quality
+    print("Validating data quality...")
+    print(f"    Feature NaN count: {X.isna().sum().sum()}")
+    print(f"    Target NaN count: {y_multi.isna().sum().sum()}")
+    print(f"    Feature infinite count: {np.isinf(X.values).sum()}")
+    print(f"    Target infinite count: {np.isinf(y_multi.values).sum()}")
+    
+    # Clean any remaining NaN or infinite values
+    X = X.fillna(0)
+    y_multi = y_multi.fillna(0)
+    X = X.replace([np.inf, -np.inf], 0)
+    y_multi = y_multi.replace([np.inf, -np.inf], 0)
+    
     print("Multi-target data preparation complete.")
     print(f"    Feature shape: {X.shape}")
     print(f"    Target shape: {y_multi.shape}")
+    print(f"    Feature range: [{X.min().min():.6f}, {X.max().max():.6f}]")
+    print(f"    Target range: [{y_multi.min().min():.6f}, {y_multi.max().max():.6f}]")
     
     return X, y_multi
 
@@ -997,6 +1270,190 @@ def create_csv_metadata_file(csv_output_dir, strategy_tags, timestamp):
     return metadata_path
 
 
+def plot_cumulative_returns_xarray(regout_list, sweep_tags, config):
+    """
+    Create simplified tear sheet with cumulative returns and performance statistics.
+    Portrait orientation optimized for PDF tear sheet.
+    """
+    os.makedirs('reports', exist_ok=True)
+    
+    # Prepare data for all strategies
+    cumulative_returns_data = []
+    
+    for regout_df, tag in zip(regout_list, sweep_tags):
+        if 'portfolio_ret' in regout_df.columns:
+            returns = regout_df['portfolio_ret'].dropna()
+            if len(returns) > 0:
+                cumulative_returns = returns.cumsum()
+                cumulative_returns_data.append({
+                    'strategy': tag,
+                    'cumulative_returns': cumulative_returns,
+                    'returns': returns
+                })
+    
+    if not cumulative_returns_data:
+        print("No valid cumulative returns data found")
+        return
+    
+    # Create portrait-oriented figure for PDF tear sheet
+    plt.close('all')  # Close all existing plots
+    fig = plt.figure(figsize=(12, 18))  # Increased height for better spacing
+    
+    # Create 4x1 subplot layout: title, plot, legend, table
+    gs = fig.add_gridspec(4, 1, hspace=0.4, height_ratios=[0.2, 2, 0.4, 1])
+    
+    # Use a better color palette optimized for printing
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22']
+    
+    # Create strategy names for legend
+    strategy_names = [data['strategy'].replace('mt_', '').replace('_', ' ') for data in cumulative_returns_data]
+    
+    # 0. Title Section
+    ax_title = fig.add_subplot(gs[0])
+    ax_title.axis('off')
+    ax_title.text(0.5, 0.5, 'STRATEGY PERFORMANCE TEAR SHEET', 
+                 fontsize=20, fontweight='bold', ha='center', va='center',
+                 transform=ax_title.transAxes)
+    
+    # 1. Main Cumulative Returns Plot
+    ax1 = fig.add_subplot(gs[1])
+    
+    for i, data in enumerate(cumulative_returns_data):
+        ax1.plot(data['cumulative_returns'].index, data['cumulative_returns'].values, 
+                linewidth=2.5, color=colors[i], alpha=0.8, label=None)
+    
+    ax1.set_title('ALL STRATEGIES - Cumulative Returns Comparison', fontsize=16, fontweight='bold', pad=20)
+    ax1.set_ylabel('Cumulative Log-Return', fontsize=12)
+    ax1.set_xlabel('Date', fontsize=12)
+    ax1.tick_params(axis='both', which='major', labelsize=10)
+    ax1.grid(True, alpha=0.2)
+    
+    # Explicitly set legend to None to prevent any automatic legend
+    ax1.legend_ = None
+    
+    # Add axis lines AFTER plotting data - use actual data limits
+    ax1.axhline(y=0, color='black', linewidth=1.0, alpha=0.7)
+    # Get the actual x-axis limits after plotting
+    x_min = min([data['cumulative_returns'].index.min() for data in cumulative_returns_data])
+    ax1.axvline(x=x_min, color='black', linewidth=1.0, alpha=0.7)
+    
+    # 2. Legend (middle)
+    ax_legend = fig.add_subplot(gs[2])
+    ax_legend.axis('off')
+    
+    # Create legend in the middle subplot with better formatting
+    legend_elements = [plt.Line2D([0], [0], color=colors[i], linewidth=3, label=strategy_names[i]) 
+                      for i in range(len(cumulative_returns_data))]
+    legend = ax_legend.legend(handles=legend_elements, loc='center', ncol=3, fontsize=11, 
+                             framealpha=0.9, fancybox=True, shadow=True)
+    legend.set_bbox_to_anchor((0.5, 0.5))  # Ensure legend is centered in its subplot
+    
+    # 3. Performance Summary Table (bottom)
+    ax2 = fig.add_subplot(gs[3])
+    ax2.axis('off')
+    
+    # Calculate performance metrics (same as view_cached_results)
+    performance_data = []
+    for data in cumulative_returns_data:
+        returns = data['returns']
+        annual_return = 252 * returns.mean()
+        annual_vol = np.sqrt(252) * returns.std()
+        sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
+        max_drawdown = (returns.cumsum() - returns.cumsum().expanding().max()).min()
+        
+        performance_data.append({
+            'Strategy': data['strategy'].replace('mt_', '').replace('_', ' '),
+            'Annual Return (%)': f"{annual_return:.2%}",
+            'Annual Vol (%)': f"{annual_vol:.2%}",
+            'Sharpe Ratio': f"{sharpe_ratio:.2f}",
+            'Max Drawdown (%)': f"{max_drawdown:.2%}"
+        })
+    
+    # Create table
+    df = pd.DataFrame(performance_data)
+    df_sorted = df.sort_values('Sharpe Ratio', key=lambda x: pd.to_numeric(x.str.rstrip('%'), errors='coerce'), ascending=False)
+    
+    # Add table title
+    ax2.text(0.5, 0.95, 'PERFORMANCE SUMMARY', fontsize=16, fontweight='bold', 
+             ha='center', va='top', transform=ax2.transAxes)
+    
+    table = ax2.table(cellText=df_sorted.values, 
+                     colLabels=df_sorted.columns,
+                     cellLoc='center',
+                     loc='center',
+                     bbox=[0.05, 0.05, 0.9, 0.85])
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.3, 2.0)
+    
+    # Set column widths - make Strategy column wider
+    col_widths = [0.35, 0.15, 0.15, 0.15, 0.20]  # Strategy gets 35% width
+    for i, width in enumerate(col_widths):
+        for j in range(len(df_sorted) + 1):  # +1 for header row
+            table[(j, i)].set_width(width)
+    
+    # Style the table with better colors
+    for i in range(len(df_sorted.columns)):
+        table[(0, i)].set_facecolor('#2E8B57')  # Sea green header
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Color code rows based on Sharpe ratio
+    for i in range(1, len(df_sorted) + 1):
+        sharpe_val = float(df_sorted.iloc[i-1]['Sharpe Ratio'])
+        if sharpe_val > 0.5:
+            row_color = '#E8F5E8'  # Light green for good performers
+        elif sharpe_val > 0:
+            row_color = '#FFF8DC'  # Light yellow for positive
+        else:
+            row_color = '#FFE6E6'  # Light red for negative
+        
+        for j in range(len(df_sorted.columns)):
+            table[(i, j)].set_facecolor(row_color)
+    
+    ax2.set_title('PERFORMANCE SUMMARY TABLE', fontsize=14, fontweight='bold', pad=20)
+    
+    # Create unified legend for all plots (positioned at the top)
+    legend_elements = [plt.Line2D([0], [0], color=colors[i], linewidth=3, label=strategy_names[i]) 
+                      for i in range(len(cumulative_returns_data))]
+    
+    # Add unified legend at the top center
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.98), 
+              fontsize=11, framealpha=0.9, ncol=3, fancybox=True, shadow=True)
+    
+    # Add overall title
+    plt.suptitle(f'STRATEGY ANALYSIS TEAR SHEET - {len(cumulative_returns_data)} Strategies', 
+                fontsize=18, fontweight='bold', y=0.95)
+    
+    # Save plot
+    plot_filename = f'reports/strategy_tear_sheet_{config["run_timestamp"]}.png'
+    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+    print(f"📊 Tear sheet saved: {plot_filename}")
+    print(f"   📁 Full path: {os.path.abspath(plot_filename)}")
+    print(f"   🖼️  Open with: open {plot_filename}")
+    
+    # Also save as PDF for professional tear sheet
+    pdf_filename = f'reports/strategy_tear_sheet_{config["run_timestamp"]}.pdf'
+    plt.savefig(pdf_filename, dpi=300, bbox_inches='tight', format='pdf')
+    print(f"📄 PDF tear sheet saved: {pdf_filename}")
+    print(f"   📁 Full path: {os.path.abspath(pdf_filename)}")
+    print(f"   📖 Open with: open {pdf_filename}")
+    
+    # Display plot inline in VS Code/Cursor
+    plt.show()
+    plt.close()
+    
+    # Save summary data as CSV
+    try:
+        summary_df = pd.DataFrame(performance_data)
+        csv_filename = f'reports/strategy_summary_{config["run_timestamp"]}.csv'
+        summary_df.to_csv(csv_filename, index=False)
+        print(f"Saved strategy summary CSV: {csv_filename}")
+    except Exception as e:
+        print(f"Warning: Could not save CSV file: {e}")
+    
+    return cumulative_returns_data
+
+
 def main():
     """
     Main execution function for multi-target ETF prediction simulation.
@@ -1012,6 +1469,10 @@ def main():
         'force_retrain': False,
         'csv_output_dir': '/Volumes/ext_2t/ERM3_Data/stock_data/csv'  # External drive CSV directory
     }
+    
+    # Force cache usage for quick results
+    config['use_cache'] = True
+    config['force_retrain'] = False
     
     # Create timestamp for this run
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1041,11 +1502,11 @@ def main():
     # Strategy sweep configuration
     models = {
         'linear': {'regressor': LinearRegression()},
-        'ridge': {'regressor': Ridge(alpha=1.0)},
-        'random_forest': {'regressor': MultiOutputRegressor(RandomForestRegressor(n_estimators=20, random_state=42))}
+        'huber': {'regressor': MultiOutputRegressor(HuberRegressor(epsilon=1.35))},
+        'elasticnet': {'regressor': MultiOutputRegressor(ElasticNet(alpha=0.01, l1_ratio=0.5))}
     }
     
-    scalers = {'std': StandardScaler(), 'none': None}
+    scalers = {'std': StandardScaler()}  # Only StandardScaler
     
     position_strategies = {
         'EqualWeight': (L_func_multi_target_equal_weight, [1.0]),
@@ -1124,7 +1585,7 @@ def main():
         
         # Save detailed statistics to CSV
         stats_results = sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG')
-        if stats_results:
+        if stats_results is not None and not stats_results.empty:
             stats_df = pd.DataFrame(stats_results).T  # Transpose for better CSV format
             stats_csv_path = os.path.join(config['csv_output_dir'], f"{timestamp}_detailed_statistics.csv")
             stats_df.to_csv(stats_csv_path)
@@ -1144,30 +1605,112 @@ def main():
             combined_df.to_csv(combined_csv_path)
             print(f"Combined results saved to: {combined_csv_path}")
         
-        # Create plots and save to reports directory (for visualization)
-        print("\nGenerating visualization reports...")
+        # Create professional tear sheet using new plotting utilities
+        print("\nGenerating professional tear sheet...")
         try:
-            plot_individual_target_performance(regout_list, sweep_tags, target_etfs, config)
-            plot_portfolio_summary(regout_list, sweep_tags, target_etfs, config)
-            print("Visualization reports saved to reports/ directory")
+            from plotting_utils import create_professional_tear_sheet, create_simple_comparison_plot
+            
+            # Generate professional tear sheet
+            pdf_path = create_professional_tear_sheet(regout_list, sweep_tags, config)
+            if pdf_path:
+                print(f"✅ Professional tear sheet created: {pdf_path}")
+            
+            # Also create simple comparison plot
+            simple_plot = create_simple_comparison_plot(regout_list, sweep_tags, config)
+            if simple_plot:
+                print(f"📈 Simple comparison plot created: {simple_plot}")
+            
+            # Display performance summary table
+            display_performance_summary_table(regout_list, sweep_tags)
+            
         except Exception as e:
-            print(f"Warning: Could not generate plots: {str(e)}")
-        
-        print(f"\n🎉 All simulation results and analysis saved to: {config['csv_output_dir']}")
-        print(f"\nRun ID: {timestamp}")
-        print("\nCSV Files Created:")
-        print(f"  - Individual strategy results: {timestamp}_[strategy_name]_results.csv")
-        print(f"  - Performance summary: {timestamp}_performance_summary.csv")
-        print(f"  - Detailed statistics: {timestamp}_detailed_statistics.csv") 
-        print(f"  - Combined results: {timestamp}_all_strategies_combined.csv")
-        print(f"  - Metadata file: {timestamp}_csv_metadata.csv")
+            print(f"Warning: Could not generate tear sheet: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         # Create CSV metadata file
         metadata_path = create_csv_metadata_file(config['csv_output_dir'], sweep_tags, timestamp)
-        print(f"  - Metadata saved to: {metadata_path}")
+        
+        # Final output summary with all file links
+        print(f"\n🎉 All simulation results and analysis saved to: {config['csv_output_dir']}")
+        print(f"\nRun ID: {timestamp}")
+        print("\n📁 Generated Files:")
+        print(f"  📊 Individual strategy results: {timestamp}_[strategy_name]_results.csv")
+        print(f"  📈 Performance summary: {timestamp}_performance_summary.csv")
+        print(f"  📋 Detailed statistics: {timestamp}_detailed_statistics.csv") 
+        print(f"  🔗 Combined results: {timestamp}_all_strategies_combined.csv")
+        print(f"  📄 Metadata file: {timestamp}_csv_metadata.csv")
+        print(f"  📄 Metadata saved to: {metadata_path}")
+        
+        # Show tear sheet links at the end with full paths
+        reports_dir = os.path.abspath('reports/')
+        print(f"\n📊 Visualization Files:")
+        print(f"  📄 Simulation tear sheet: {reports_dir}/sim_tear_sheet_{timestamp}.pdf")
+        print(f"  🖼️  Simple comparison: {reports_dir}/simple_comparison_{timestamp}.png")
+        print(f"  📁 Reports directory: {reports_dir}")
         
     else:
         print("No successful simulations completed.")
+
+def display_performance_summary_table(regout_list, sweep_tags):
+    """
+    Display a performance summary table similar to view_cached_results.
+    """
+    print("\n" + "="*100)
+    print("SIMULATION RESULTS SUMMARY")
+    print("="*100)
+    
+    results_summary = []
+    
+    for regout_df, tag in zip(regout_list, sweep_tags):
+        if 'portfolio_ret' in regout_df.columns:
+            portfolio_returns = regout_df['portfolio_ret'].dropna()
+            
+            if len(portfolio_returns) > 0:
+                annual_return = 252 * portfolio_returns.mean()
+                annual_vol = np.sqrt(252) * portfolio_returns.std()
+                sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
+                max_drawdown = (portfolio_returns.cumsum() - portfolio_returns.cumsum().expanding().max()).min()
+                
+                results_summary.append({
+                    'Strategy': tag,
+                    'Annual Return (%)': annual_return,
+                    'Annual Vol (%)': annual_vol,
+                    'Sharpe Ratio': sharpe_ratio,
+                    'Max Drawdown (%)': max_drawdown,
+                    'Data Points': len(portfolio_returns),
+                    'Date Range': f"{portfolio_returns.index.min().date()} to {portfolio_returns.index.max().date()}"
+                })
+    
+    if results_summary:
+        # Convert to DataFrame and sort by Sharpe ratio
+        df = pd.DataFrame(results_summary)
+        df_sorted = df.sort_values('Sharpe Ratio', ascending=False)
+        
+        # Format for display
+        display_df = df_sorted.copy()
+        display_df['Annual Return (%)'] = display_df['Annual Return (%)'].apply(lambda x: f"{x:.2%}")
+        display_df['Annual Vol (%)'] = display_df['Annual Vol (%)'].apply(lambda x: f"{x:.2%}")
+        display_df['Sharpe Ratio'] = display_df['Sharpe Ratio'].apply(lambda x: f"{x:.2f}")
+        display_df['Max Drawdown (%)'] = display_df['Max Drawdown (%)'].apply(lambda x: f"{x:.2%}")
+        
+        print(display_df[['Strategy', 'Annual Return (%)', 'Annual Vol (%)', 'Sharpe Ratio', 'Max Drawdown (%)']].to_string(index=False))
+        
+        print(f"\n📊 Completed {len(results_summary)} successful simulations")
+        
+        # Show top performers
+        if len(results_summary) > 0:
+            print(f"\n🏆 Top 3 by Sharpe Ratio:")
+            for i, row in df_sorted.head(3).iterrows():
+                print(f"   {i+1}. {row['Strategy']}: {row['Sharpe Ratio']:.2f} Sharpe, {row['Annual Return (%)']:.2%} return")
+            
+            print(f"\n📈 Top 3 by Annual Return:")
+            for i, row in df_sorted.sort_values('Annual Return (%)', ascending=False).head(3).iterrows():
+                print(f"   {i+1}. {row['Strategy']}: {row['Annual Return (%)']:.2%} return, {row['Sharpe Ratio']:.2f} Sharpe")
+    else:
+        print("No valid results to display")
+    
+    print("="*100)
 
 def demonstrate_portfolio_return_calculation():
     """
