@@ -76,7 +76,7 @@ from utils_simulate import (
 )
 
 # Professional plotting utilities
-from plotting_utils import create_professional_tear_sheet, create_simple_comparison_plot
+from plotting_utils import create_tear_sheet, create_simple_comparison_plot
 
 
 
@@ -685,9 +685,9 @@ def main():
         except NameError:
             print(stats_df.round(4))
         
-        # --- Professional Visualization ---
-        logger.info("Generating professional tear sheet...")
-        tear_sheet_path = create_professional_tear_sheet(
+        # --- Visualization ---
+        logger.info("Generating tear sheet...")
+        tear_sheet_path = create_tear_sheet(
             list(enhanced_results.values()), sweep_tags, config
         )
         

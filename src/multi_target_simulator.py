@@ -1980,11 +1980,11 @@ def main():
         # Create professional tear sheet and benchmark analysis
         logger.info("Generating professional tear sheet and benchmark analysis...")
         try:
-            from plotting_utils import (create_professional_tear_sheet, create_simple_comparison_plot,
+            from plotting_utils import (create_tear_sheet, create_simple_comparison_plot,
                                        plot_strategy_vs_benchmarks, create_benchmark_comparison_heatmap)
             
             # Generate professional tear sheet
-            pdf_path = create_professional_tear_sheet(regout_list, sweep_tags, config)
+            pdf_path = create_tear_sheet(regout_list, sweep_tags, config)
             if pdf_path:
                 logger.info(f"✅ Professional tear sheet created: {pdf_path}")
             

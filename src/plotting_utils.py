@@ -45,7 +45,7 @@ sns.set_palette("husl")
 plt.rcParams['font.size'] = 10
 plt.rcParams['axes.linewidth'] = 1.5
 
-def create_professional_tear_sheet(regout_list, sweep_tags, config):
+def create_tear_sheet(regout_list, sweep_tags, config):
     """
     Create a professional, publication-quality tear sheet.
     
