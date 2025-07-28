@@ -31,7 +31,11 @@ By completing this framework, students will:
 1. **Master time-series simulation** to avoid common pitfalls like look-ahead bias
 2. **Use xarray for efficient data organization** and visualization in finance
 3. **Build ML pipelines** for feature preprocessing and learner exploration
-4. **Implement professional benchmarking** with information ratios and excess returns
+4. **Learn institutional benchmarking practices** - the foundation of professional quant analysis:
+   - Calculate information ratios and excess returns vs standard benchmarks
+   - Understand buy-and-hold vs zero-return baseline comparisons
+   - Apply benchmark selection methodology used at hedge funds
+   - Interpret risk-adjusted performance metrics in institutional context
 5. **Generate publication-quality reports** with PDF tear sheets and performance analysis
 6. **Understand portfolio construction** and risk management principles
 7. **Configure advanced simulations** with flexible parameter management
@@ -222,17 +226,29 @@ The framework generates professional tear sheets including:
 
 ## Student Exercises & Capstone Ideas
 
-### Beginner Exercises
-1. **Custom Benchmarking**: Create sector-specific benchmarks (e.g., technology vs QQQ)
-2. **Position Sizing Extensions**: Implement volatility-adjusted position sizing
-3. **Feature Engineering**: Add momentum indicators and technical analysis features
-4. **Model Comparison**: Compare Ridge, Random Forest, and Linear models using performance metrics
+### Beginner Exercises (Focus on Benchmarking Fundamentals)
+1. **Benchmark Selection Analysis**: Compare your SPY strategy against different benchmarks:
+   - Buy-and-hold SPY vs zero-return baseline - which tells you more about strategy skill?
+   - Calculate and interpret information ratios - what does a 0.8 vs 1.2 Info Ratio mean?
+   - Analyze when benchmarks disagree - why might buy-and-hold show negative excess return while zero-return shows positive?
+2. **Risk-Adjusted Performance Deep Dive**: 
+   - Compare raw returns vs Sharpe ratios vs information ratios - when do they give different rankings?
+   - Study periods where your strategy underperforms benchmarks - what market conditions cause this?
+3. **Position Sizing vs Benchmarking**: Implement volatility-adjusted position sizing and see how it affects benchmark comparisons
+4. **Model Comparison Through Benchmarking Lens**: Compare Ridge, Random Forest, and Linear models - do better prediction models always have better benchmark performance?
 
-### Intermediate Projects  
-1. **Multi-Timeframe Analysis**: Compare daily vs weekly vs monthly rebalancing strategies
-2. **Rolling vs Expanding Windows**: Analyze training window impacts on performance
-3. **Benchmark Sensitivity**: Test strategy robustness across different benchmark periods
-4. **Risk-Adjusted Metrics**: Implement Calmar ratio, Sortino ratio, and other advanced metrics
+### Intermediate Projects (Advanced Benchmarking Applications)
+1. **Benchmark Regime Analysis**: How do your strategies perform vs benchmarks in different market regimes?
+   - Bull markets (2010-2018): Does your strategy add value when markets are rising?
+   - Bear markets (2008 crisis, COVID-19): Does benchmarking reveal defensive characteristics?
+   - Sideways markets: When do active strategies most outperform buy-and-hold?
+2. **Multi-Timeframe Benchmark Consistency**: 
+   - Compare daily vs weekly vs monthly rebalancing - do information ratios stay consistent?
+   - Study transaction cost impact on benchmark comparisons
+3. **Rolling Benchmark Analysis**: Use 1-year rolling windows to study:
+   - When does your strategy consistently beat benchmarks vs when it struggles?
+   - How stable are information ratios over time?
+4. **Custom Benchmark Construction**: Build sector-rotation benchmarks and compare performance attribution
 
 ### Advanced Capstone Projects
 1. **Regime Detection**: Implement bull/bear market switching using hidden Markov models with benchmark-aware transitions
