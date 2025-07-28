@@ -51,7 +51,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
 # Utility functions from our custom library  
-from .utils_simulate import (
+from utils_simulate import (
     simplify_teos, log_returns, generate_train_predict_calender,
     StatsModelsWrapper_with_OLS, p_by_year, EWMTransformer,
     create_results_xarray, plot_xarray_results, calculate_performance_metrics
@@ -886,7 +886,11 @@ def load_and_prepare_multi_target_data(etf_list, target_etfs, start_date=None):
     etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
 
     # Set timezone and align timestamps
-    etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York').map(
+    # Handle case where index doesn't have timezone info
+    if etf_log_returns_df.index.tz is None:
+        etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York')
+    
+    etf_log_returns_df.index = etf_log_returns_df.index.map(
         lambda x: x.replace(hour=16, minute=00)
     ).tz_convert('UTC')
     etf_log_returns_df.index.name = 'teo'
