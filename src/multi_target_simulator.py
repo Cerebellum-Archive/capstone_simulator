@@ -1206,26 +1206,26 @@ def demonstrate_portfolio_return_calculation():
             [2.0]  # base leverage = 2.0
         )
         
-        # Old method (WRONG for long-short)
+        # Method (WRONG for long-short)
         leverage_sum = weights.sum()  # This will be ~0 for long-short
         equal_weight_return = actual_row.mean()
-        old_portfolio_return = leverage_sum * equal_weight_return
+        portfolio_return = leverage_sum * equal_weight_return
         
-        # New method (CORRECT)
-        new_portfolio_return = np.sum(weights * actual_row.values)
+        # Method
+        portfolio_return_weighted = np.sum(weights * actual_row.values)
         
         print(f"\nDate: {date.strftime('%Y-%m-%d')}")
         print(f"Individual Weights: {dict(zip(pred_row.index, weights.round(4)))}")
         print(f"Sum of Weights: {leverage_sum:.4f}")
         print(f"Equal-Weight Return: {equal_weight_return:.4f}")
-        print(f"OLD Method Return: {old_portfolio_return:.4f} (= {leverage_sum:.4f} × {equal_weight_return:.4f})")
-        print(f"NEW Method Return: {new_portfolio_return:.4f} (= weighted sum of individual returns)")
-        print(f"Difference: {abs(new_portfolio_return - old_portfolio_return):.4f}")
+        print(f"Method Return: {portfolio_return:.4f} (= {leverage_sum:.4f} × {equal_weight_return:.4f})")
+        print(f"Method Return: {portfolio_return_weighted:.4f} (= weighted sum of individual returns)")
+        print(f"Difference: {abs(portfolio_return_weighted - portfolio_return):.4f}")
     
     print("\n" + "="*80)
     print("CONCLUSION:")
-    print("- OLD method gives 0% return for long-short strategies (WRONG!)")
-    print("- NEW method properly calculates weighted returns (CORRECT!)")
+    print("- Method gives 0% return for long-short strategies!")
+    print("- Method properly calculates weighted returns!")
     print("- The difference is critical for long-short strategy evaluation")
     print("="*80)
 
