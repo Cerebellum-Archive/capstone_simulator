@@ -55,7 +55,14 @@ def simplify_teos(df: pd.DataFrame) -> pd.DataFrame:
         Timezone handling is crucial in global markets. This function standardizes
         all timestamps to prevent alignment issues in multi-source data analysis.
     """
-    df.index = df.index.tz_localize(None).normalize()
+    # Handle timezone conversion more robustly
+    if df.index.tz is not None:
+        # If timezone-aware, convert to UTC first, then remove timezone
+        df.index = df.index.tz_convert('UTC').tz_localize(None)
+    else:
+        # If already timezone-naive, just normalize
+        df.index = df.index.normalize()
+    
     return df
 
 

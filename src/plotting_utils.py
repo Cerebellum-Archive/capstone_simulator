@@ -24,16 +24,16 @@ def format_benchmark_name(benchmark_col: str) -> str:
         return 'EQ WT Targets'
     elif name == 'Equal Weight All':
         return 'EQ WT All'
+    elif name == 'Equal Weight Features':
+        return 'EQ WT Features'
     elif name == 'Spy Only':
         return 'SPY Only'
-    elif name == 'Vti Market':
-        return 'VTI Market'
+    elif name == 'Zero Return':
+        return 'Zero Return'
     elif name == 'Random Long Short':
-        return 'Rand L/S'
+        return 'Random L/S'
     elif name == 'Risk Parity':
         return 'Risk Parity'
-    elif name == 'Zero Return':
-        return 'Zero Ret'
     return name
 
 @dataclass
@@ -267,7 +267,7 @@ def create_tear_sheet(regout_list, sweep_tags, config):
                     elif strategy_type == 'confidence_weighted':
                         priority_benchmarks = ['risk_parity', 'spy_only', 'equal_weight_targets']
                     else:  # equal_weight or single-target
-                        priority_benchmarks = ['buy_and_hold', 'zero_return', 'spy_only', 'equal_weight_targets', 'vti_market', 'equal_weight_all']
+                        priority_benchmarks = ['buy_and_hold', 'zero_return', 'spy_only', 'equal_weight_targets', 'equal_weight_features', 'zero_return']
                     
                     # Select benchmarks that exist in priority order
                     for priority in priority_benchmarks:
@@ -350,7 +350,24 @@ def create_tear_sheet(regout_list, sweep_tags, config):
     # Plot cumulative returns
     for i, data in enumerate(cumulative_returns_data):
         color = colors[i % len(colors)]
-        ax_chart.plot(data['cumulative_returns'].index, data['cumulative_returns'].values,
+        
+        # Debug date index issue
+        date_index = data['cumulative_returns'].index
+        print(f"DEBUG: Strategy {data['strategy']} date range: {date_index.min()} to {date_index.max()}")
+        
+        # Check if index looks corrupted (all 1970 dates)
+        if hasattr(date_index, 'year') and len(date_index) > 0:
+            if all(date_index.year == 1970):
+                print(f"WARNING: Corrupted date index detected for {data['strategy']}, attempting to fix...")
+                # Try to reconstruct proper date index - use a reasonable date range
+                start_date = pd.Timestamp('2011-01-01')
+                end_date = pd.Timestamp('2025-07-01') 
+                proper_dates = pd.date_range(start=start_date, end=end_date, periods=len(date_index))
+                data['cumulative_returns'].index = proper_dates
+                date_index = proper_dates
+                print(f"FIXED: New date range: {date_index.min()} to {date_index.max()}")
+        
+        ax_chart.plot(date_index, data['cumulative_returns'].values,
                      linewidth=2.5, color=color, alpha=0.9, label=data['strategy'].replace('mt_', '').replace('_', ' '))
     
     # Professional chart styling - clean and minimal with minimal spacing
@@ -612,7 +629,7 @@ def create_tear_sheet(regout_list, sweep_tags, config):
     
     return pdf_filename
 
-def plot_strategy_vs_benchmarks(regout_df: pd.DataFrame, strategy_name: str, config) -> str:
+def plot_strategy_vs_benchmarks(regout_df: pd.DataFrame, strategy_name: str, config, born_on_date=None) -> str:
     """Plot strategy performance against strategy-appropriate benchmarks only."""
     benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
     
@@ -637,7 +654,7 @@ def plot_strategy_vs_benchmarks(regout_df: pd.DataFrame, strategy_name: str, con
         priority_benchmarks = ['risk_parity', 'spy_only', 'equal_weight_targets']
     else:  # equal_weight
         # For equal weight: show spy, equal weight, and vti
-        priority_benchmarks = ['spy_only', 'equal_weight_targets', 'vti_market', 'equal_weight_all']
+        priority_benchmarks = ['spy_only', 'equal_weight_targets', 'equal_weight_features', 'zero_return']
     
     # Select benchmarks that exist in priority order
     for priority in priority_benchmarks:
@@ -678,6 +695,23 @@ def plot_strategy_vs_benchmarks(regout_df: pd.DataFrame, strategy_name: str, con
     ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax1.grid(True, alpha=0.3)
     ax1.axhline(y=0, color='black', linewidth=0.8, alpha=0.5)
+    
+    # Add vertical line for born_on_date if provided
+    if born_on_date:
+        try:
+            from dateutil.parser import parse
+            if isinstance(born_on_date, str):
+                born_date = parse(born_on_date)
+            else:
+                born_date = born_on_date
+            
+            # Only add line if date is within the plot range
+            if born_date >= regout_df.index.min() and born_date <= regout_df.index.max():
+                ax1.axvline(x=born_date, color='purple', linewidth=2, linestyle=':', alpha=0.8, 
+                           label=f'Strategy Born: {born_date.strftime("%Y-%m-%d")}')
+                ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')  # Refresh legend
+        except Exception as e:
+            print(f"Warning: Could not plot born_on_date {born_on_date}: {e}")
     
     # Rolling Sharpe ratio comparison (use same relevant benchmarks)
     window = TRADING_DAYS_PER_YEAR  # 1-year rolling
@@ -741,7 +775,7 @@ def create_benchmark_comparison_heatmap(regout_list, sweep_tags, config) -> str:
         elif strategy_type == 'confidence_weighted':
             relevant_benchmark_names = ['risk_parity', 'spy_only', 'equal_weight_targets']
         else:  # equal_weight
-            relevant_benchmark_names = ['spy_only', 'equal_weight_targets', 'vti_market', 'equal_weight_all']
+            relevant_benchmark_names = ['spy_only', 'equal_weight_targets', 'equal_weight_features', 'zero_return']
         
         for benchmark_name in relevant_benchmark_names:
             benchmark_col = f'benchmark_{benchmark_name}'

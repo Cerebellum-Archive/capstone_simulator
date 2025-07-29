@@ -10,10 +10,10 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Blue Water Macro Educational License (BWMEL)"}
 authors = [
-    {name = "Conrad Gann", email = "Conrad.Gann@BlueWaterMacro.com"},
+    {name = "Conrad Gann", email = "Capstone@BlueWaterMacro.com"},
 ]
 maintainers = [
-    {name = "Conrad Gann", email = "Conrad.Gann@BlueWaterMacro.com"},
+    {name = "Conrad Gann", email = "Capstone@BlueWaterMacro.com"},
 ]
 keywords = [
     "quantitative-trading",

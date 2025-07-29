@@ -885,8 +885,19 @@ def load_and_prepare_data(etf_list, target_etf, start_date=None):
         5. Align data temporally to prevent look-ahead bias
     """
     print(f"Downloading and preparing data from {start_date}...")
-    all_etf_closing_prices_df = yf.download(etf_list, start=start_date, auto_adjust=True)['Close']
-    etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
+    
+    # Use cached download to avoid API limits
+    try:
+        from .multi_target_simulator import download_etf_data_with_cache
+        etf_log_returns_df = download_etf_data_with_cache(etf_list, start_date=start_date)
+    except ImportError:
+        from multi_target_simulator import download_etf_data_with_cache
+        etf_log_returns_df = download_etf_data_with_cache(etf_list, start_date=start_date)
+    
+    if etf_log_returns_df.empty:
+        print("⚠️ Failed to download data - trying direct yfinance as fallback")
+        all_etf_closing_prices_df = yf.download(etf_list, start=start_date, auto_adjust=True)['Close']
+        etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
 
     # Set timezone and align timestamps
     etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York').map(lambda x: x.replace(hour=16, minute=00)).tz_convert('UTC')

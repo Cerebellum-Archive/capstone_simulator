@@ -663,7 +663,7 @@ def cached_calculation(data_hash):
 1. **Documentation**: Check `docs/` folder for detailed guides
 2. **GitHub Issues**: Report bugs and request features
 3. **Community**: Connect with other students on QuantNet
-4. **Professional Support**: Contact Conrad.Gann@BlueWaterMacro.com
+4. **Professional Support**: Contact Capstone@BlueWaterMacro.com
 
 ---
 

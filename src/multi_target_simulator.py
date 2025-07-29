@@ -47,9 +47,68 @@ from typing import List, Tuple, Any, Dict
 from dataclasses import dataclass
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Import zarr with error handling
+try:
+    import zarr
+    ZARR_AVAILABLE = True
+except ImportError:
+    ZARR_AVAILABLE = False
+    print("⚠️ zarr not available - install with: pip install zarr>=2.12.0")
+
+# Configure logging with file output
+def setup_logging():
+    """Set up logging to both console and file with rotation."""
+    import logging.handlers
+    from pathlib import Path
+    
+    # Create logs directory
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Get root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # File handler with rotation (10MB max, keep 5 files)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_dir / "multi_target_simulator.log",
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    
+    # Separate error log
+    error_handler = logging.handlers.RotatingFileHandler(
+        log_dir / "errors.log",
+        maxBytes=5*1024*1024,  # 5MB
+        backupCount=3
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
+    root_logger.addHandler(error_handler)
+    
+    print(f"Logging configured - files will be written to: {log_dir.absolute()}")
+    return root_logger
+
+# Set up logging
+logger = setup_logging()
 
 # Constants
 TRADING_DAYS_PER_YEAR = 252
@@ -288,18 +347,48 @@ def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
     """
     import xarray as xr
     
+    if not ZARR_AVAILABLE:
+        raise ImportError("zarr package is required but not available. Install with: pip install zarr>=2.12.0")
+    
     os.makedirs('cache', exist_ok=True)
     cache_filename = f'cache/simulation_{simulation_hash}_{tag}.zarr'
     
+    # Clean the DataFrame for zarr compatibility
+    clean_df = regout_df.copy()
+    
+    # Ensure all columns are numeric and handle any object types
+    for col in clean_df.columns:
+        if clean_df[col].dtype == 'object':
+            try:
+                clean_df[col] = pd.to_numeric(clean_df[col], errors='coerce')
+            except:
+                clean_df[col] = clean_df[col].astype(str)
+    
+    # Fill any remaining NaN values that might cause zarr issues
+    clean_df = clean_df.fillna(0.0)
+    
+    # Ensure index is datetime for proper zarr time handling
+    if not isinstance(clean_df.index, pd.DatetimeIndex):
+        try:
+            clean_df.index = pd.to_datetime(clean_df.index)
+        except:
+            pass  # Keep original index if conversion fails
+    
     # Convert DataFrame to xarray Dataset with proper time indexing
-    ds = xr.Dataset.from_dataframe(regout_df)
+    ds = xr.Dataset.from_dataframe(clean_df)
+    
+    # Add born_on_date as a coordinate for easy referencing
+    born_on_timestamp = datetime.now().isoformat()
+    
+    # Add born_on_date as a scalar coordinate
+    ds = ds.assign_coords(born_on_date=born_on_timestamp)
     
     # Add comprehensive metadata as attributes
     ds.attrs['simulation_hash'] = simulation_hash
     ds.attrs['strategy_tag'] = tag
     ds.attrs['cache_version'] = '3.0'  # New zarr-based version
     ds.attrs['save_timestamp'] = datetime.now().isoformat()
-    ds.attrs['born_on_date'] = datetime.now().isoformat()  # Born on date!
+    ds.attrs['born_on_date'] = born_on_timestamp  # Also keep in attrs for backward compatibility
     
     # Add full metadata if provided
     if metadata:
@@ -335,10 +424,25 @@ def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
     else:
         print(f"⚠️ Saved without metadata - only basic info available")
     
-    # Save to zarr with compression
-    ds.to_zarr(cache_filename, mode='w', consolidated=True)
-    
-    print(f"📦 Saved simulation results to zarr: {cache_filename}")
+    # Save to zarr with compression and explicit error handling
+    try:
+        # Remove existing zarr store if it exists to avoid conflicts
+        import shutil
+        if os.path.exists(cache_filename):
+            shutil.rmtree(cache_filename)
+        
+        # Save with explicit zarr store creation for better error diagnostics
+        # Force computation of any lazy operations before saving
+        ds = ds.compute() if hasattr(ds, 'compute') else ds
+        ds.to_zarr(cache_filename, mode='w', consolidated=True)
+        
+        print(f"📦 Saved simulation results to zarr: {cache_filename}")
+        
+    except Exception as e:
+        print(f"❌ Failed to save zarr file: {e}")
+        print(f"📊 DataFrame info: shape={clean_df.shape}, dtypes={clean_df.dtypes.to_dict()}")
+        print(f"📅 Index type: {type(clean_df.index)}")
+        raise  # Re-raise the error to see the full stack trace
     if metadata and 'data_source' in metadata:
         data_source = metadata['data_source']
         print(f"  - Simulation period: {data_source.get('start_date', 'unknown')} to {data_source.get('end_date', 'unknown')}")
@@ -369,11 +473,20 @@ def load_simulation_results(simulation_hash, tag):
             # Convert back to DataFrame for compatibility
             results_df = ds.to_dataframe()
             
+            # Extract born_on_date from coordinate if available, otherwise from attrs
+            born_on_date = 'unknown'
+            if 'born_on_date' in ds.coords:
+                born_on_date = str(ds.coords['born_on_date'].values)
+            elif 'born_on_date' in ds.attrs:
+                born_on_date = ds.attrs['born_on_date']
+            elif 'creation_timestamp' in ds.attrs:
+                born_on_date = ds.attrs['creation_timestamp']
+            
             # Extract metadata from attributes
             attrs = ds.attrs
             metadata = {
                 'simulation_info': {
-                    'creation_timestamp': attrs.get('creation_timestamp', attrs.get('born_on_date', 'unknown')),
+                    'creation_timestamp': born_on_date,
                     'framework_version': attrs.get('framework_version', '0.1.0'),
                     'python_version': attrs.get('python_version', 'unknown'),
                     'tag': attrs.get('strategy_tag', tag)
@@ -430,6 +543,406 @@ def load_simulation_results(simulation_hash, tag):
             return cache_data, None
     
     return None, None
+
+def save_yfinance_data_to_zarr(data, tickers, start_date, end_date):
+    """
+    Save yfinance data to zarr for caching with metadata.
+    
+    Args:
+        data (pd.DataFrame): Multi-index DataFrame from yfinance
+        tickers (list): List of ticker symbols
+        start_date (str): Start date used for download
+        end_date (str): End date used for download
+        
+    Returns:
+        str: Path to saved zarr file
+    """
+    os.makedirs('cache/yfinance_data', exist_ok=True)
+    
+    # Create unique filename based on tickers and date range
+    tickers_str = '_'.join(sorted(tickers))
+    cache_filename = f'cache/yfinance_data/yf_{tickers_str}_{start_date}_{end_date}.zarr'
+    
+    # Convert to xarray Dataset
+    if hasattr(data.columns, 'levels'):  # Multi-index columns
+        # Flatten multi-index columns for zarr compatibility
+        data_flat = data.copy()
+        data_flat.columns = ['_'.join(col).strip() for col in data.columns.values]
+        ds = xr.Dataset.from_dataframe(data_flat)
+        
+        # Store original column structure in metadata
+        ds.attrs['original_columns'] = str(data.columns.tolist())
+        ds.attrs['column_levels'] = len(data.columns.levels) if hasattr(data.columns, 'levels') else 1
+    else:
+        ds = xr.Dataset.from_dataframe(data)
+        ds.attrs['original_columns'] = str(data.columns.tolist())
+        ds.attrs['column_levels'] = 1
+    
+    # Add metadata
+    ds.attrs['tickers'] = str(tickers)
+    ds.attrs['start_date'] = start_date
+    ds.attrs['end_date'] = end_date
+    ds.attrs['download_timestamp'] = datetime.now().isoformat()
+    ds.attrs['cache_type'] = 'yfinance_data'
+    ds.attrs['cache_version'] = '1.0'
+    
+    # Save to zarr
+    try:
+        import shutil
+        if os.path.exists(cache_filename):
+            shutil.rmtree(cache_filename)
+        
+        ds.to_zarr(cache_filename, mode='w', consolidated=True)
+        print(f"💾 Cached yfinance data to: {cache_filename}")
+        return cache_filename
+        
+    except Exception as e:
+        print(f"❌ Failed to cache yfinance data: {e}")
+        return None
+
+def load_yfinance_data_from_zarr(tickers, start_date, end_date, max_age_hours=24):
+    """
+    Load yfinance data from zarr cache if available and recent.
+    
+    Args:
+        tickers (list): List of ticker symbols
+        start_date (str): Start date
+        end_date (str): End date  
+        max_age_hours (int): Maximum age of cache in hours (default 24)
+        
+    Returns:
+        pd.DataFrame or None: Cached data if available and recent, None otherwise
+    """
+    tickers_str = '_'.join(sorted(tickers))
+    cache_filename = f'cache/yfinance_data/yf_{tickers_str}_{start_date}_{end_date}.zarr'
+    
+    if not os.path.exists(cache_filename):
+        return None
+    
+    try:
+        import xarray as xr
+        from dateutil.parser import parse
+        
+        ds = xr.open_zarr(cache_filename)
+        
+        # Check cache age
+        download_time = parse(ds.attrs['download_timestamp'])
+        age_hours = (datetime.now() - download_time).total_seconds() / 3600
+        
+        if age_hours > max_age_hours:
+            print(f"📅 Cache is {age_hours:.1f} hours old (max {max_age_hours}h), will refresh")
+            return None
+        
+        print(f"✅ Using cached yfinance data ({age_hours:.1f}h old): {cache_filename}")
+        
+        # Convert back to DataFrame
+        data = ds.to_dataframe()
+        
+        # Reconstruct original column structure if multi-index
+        if ds.attrs.get('column_levels', 1) > 1:
+            # Reconstruct multi-index columns
+            original_cols = eval(ds.attrs['original_columns'])
+            if len(original_cols) == len(data.columns):
+                data.columns = pd.MultiIndex.from_tuples(original_cols)
+            else:
+                print(f"⚠️ Column count mismatch: {len(original_cols)} expected, {len(data.columns)} found")
+        
+        # Ensure we have a proper datetime index
+        if not isinstance(data.index, pd.DatetimeIndex):
+            # If index is not datetime, try to convert it
+            try:
+                data.index = pd.to_datetime(data.index)
+            except:
+                # If conversion fails, create a new datetime index
+                print("⚠️ Failed to convert index to datetime, creating new index")
+                data.index = pd.date_range(start='2020-01-01', periods=len(data), freq='D')
+        
+        # Reset index to ensure Date is a column, not index
+        if 'Date' in data.index.names:
+            data = data.reset_index()
+        
+        return data
+        
+    except Exception as e:
+        print(f"⚠️ Failed to load cached yfinance data: {e}")
+        return None
+
+def download_etf_data_with_cache(tickers, start_date='2010-01-01', end_date=None, max_age_hours=24):
+    """
+    Download ETF data with intelligent zarr caching to avoid yfinance API limits.
+    
+    Args:
+        tickers (list): List of ETF symbols
+        start_date (str): Start date for data
+        end_date (str): End date for data (None for today)
+        max_age_hours (int): Maximum cache age in hours
+        
+    Returns:
+        pd.DataFrame: ETF price data with log returns
+    """
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+    
+    print(f"📈 Downloading ETF data for {len(tickers)} tickers: {tickers}")
+    print(f"   Period: {start_date} to {end_date}")
+    
+    # Try to load from cache first
+    cached_data = load_yfinance_data_from_zarr(tickers, start_date, end_date, max_age_hours)
+    if cached_data is not None:
+        # Process cached data (calculate log returns)
+        try:
+            from .utils_simulate import log_returns
+        except ImportError:
+            from utils_simulate import log_returns
+        
+        # Handle different column structures
+        if 'Adj Close' in cached_data.columns:
+            price_data = cached_data['Adj Close']
+        elif 'Close' in cached_data.columns:
+            price_data = cached_data['Close']
+        else:
+            # Try to find close prices in multi-index structure
+            close_cols = [col for col in cached_data.columns if 'Close' in str(col)]
+            if close_cols:
+                price_data = cached_data[close_cols[0]]
+            else:
+                print("⚠️ No Close price data found in cache")
+                return pd.DataFrame()
+        
+        log_ret_data = log_returns(price_data)
+        return log_ret_data.dropna()
+    
+    # Download fresh data if no cache or cache is stale
+    print(f"🌐 Downloading fresh data from yfinance...")
+    
+    try:
+        import yfinance as yf
+        
+        # Download with error handling for individual tickers
+        successful_data = {}
+        failed_tickers = []
+        
+        for ticker in tickers:
+            try:
+                ticker_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                if not ticker_data.empty:
+                    successful_data[ticker] = ticker_data
+                    print(f"   ✅ {ticker}: {len(ticker_data)} days")
+                else:
+                    failed_tickers.append(ticker)
+                    print(f"   ❌ {ticker}: No data returned")
+            except Exception as e:
+                failed_tickers.append(ticker)
+                print(f"   ❌ {ticker}: {str(e)}")
+        
+        if not successful_data:
+            raise Exception("No data successfully downloaded for any ticker")
+        
+        # Combine successful downloads to match yfinance multi-ticker structure
+        if len(successful_data) == 1:
+            # Single ticker - use as-is (already has proper multi-index from yfinance)
+            raw_data = list(successful_data.values())[0]
+        else:
+            # Multiple tickers - concatenate to match yfinance structure
+            # yfinance returns MultiIndex with (Price, Ticker) levels
+            raw_data = pd.concat(successful_data.values(), keys=successful_data.keys(), axis=1)
+            # Reorder to match yfinance: (Price, Ticker) instead of (Ticker, Price)
+            raw_data = raw_data.swaplevel(0, 1, axis=1).sort_index(axis=1)
+        
+        # Cache the raw data
+        save_yfinance_data_to_zarr(raw_data, tickers, start_date, end_date)
+        
+        # Process for returns
+        try:
+            from .utils_simulate import log_returns
+        except ImportError:
+            from utils_simulate import log_returns
+        
+        # Handle different column structures for price data
+        if hasattr(raw_data.columns, 'levels') and len(raw_data.columns.levels) > 1:
+            # Multi-index columns - look for Close or Adj Close prices
+            try:
+                level_0_values = raw_data.columns.get_level_values(0)  # Price types
+                if 'Adj Close' in level_0_values:
+                    close_data = raw_data.xs('Adj Close', level=0, axis=1)
+                elif 'Close' in level_0_values:
+                    close_data = raw_data.xs('Close', level=0, axis=1)
+                else:
+                    print(f"⚠️ Available price types: {level_0_values.unique()}")
+                    print("⚠️ No Close price data found in multi-index columns")
+                    return pd.DataFrame()
+                    
+                # Ensure close_data is a DataFrame with proper column names
+                if isinstance(close_data, pd.Series):
+                    close_data = close_data.to_frame(name=close_data.name)
+                    
+            except Exception as e:
+                print(f"⚠️ Error accessing multi-index columns: {e}")
+                print(f"   Column structure: {raw_data.columns}")
+                return pd.DataFrame()
+        elif 'Adj Close' in raw_data.columns:
+            close_data = raw_data[['Adj Close']]
+        elif 'Close' in raw_data.columns:
+            close_data = raw_data[['Close']]
+        else:
+            print(f"⚠️ Available columns: {raw_data.columns.tolist()}")
+            print("⚠️ No Close price data found")
+            return pd.DataFrame()
+            
+        log_ret_data = log_returns(close_data)
+        
+        if failed_tickers:
+            print(f"⚠️ Failed to download: {failed_tickers}")
+            print(f"   Continuing with {len(successful_data)} successful tickers")
+        
+        return log_ret_data.dropna()
+        
+    except Exception as e:
+        print(f"❌ yfinance download failed: {e}")
+        print("   This might be due to API limits - try again later")
+        
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame()
+
+def clean_yfinance_cache(max_age_days=7):
+    """
+    Clean old yfinance cache files to save disk space.
+    
+    Args:
+        max_age_days (int): Maximum age of cache files to keep in days
+    """
+    cache_dir = 'cache/yfinance_data'
+    if not os.path.exists(cache_dir):
+        return
+    
+    deleted_count = 0
+    total_size_saved = 0
+    
+    for filename in os.listdir(cache_dir):
+        if filename.endswith('.zarr'):
+            file_path = os.path.join(cache_dir, filename)
+            
+            try:
+                import xarray as xr
+                from dateutil.parser import parse
+                
+                ds = xr.open_zarr(file_path)
+                download_time = parse(ds.attrs['download_timestamp'])
+                age_days = (datetime.now() - download_time).total_seconds() / (24 * 3600)
+                
+                if age_days > max_age_days:
+                    # Calculate size before deletion
+                    size = sum(os.path.getsize(os.path.join(dp, f)) 
+                              for dp, dn, fn in os.walk(file_path) for f in fn)
+                    
+                    import shutil
+                    shutil.rmtree(file_path)
+                    deleted_count += 1
+                    total_size_saved += size
+                    print(f"🗑️ Deleted old cache: {filename} ({age_days:.1f} days old)")
+                    
+            except Exception as e:
+                print(f"⚠️ Error checking cache file {filename}: {e}")
+    
+    if deleted_count > 0:
+        size_mb = total_size_saved / (1024 * 1024)
+        print(f"✅ Cleaned {deleted_count} old cache files, saved {size_mb:.1f} MB")
+    else:
+        print("✅ No old cache files to clean")
+
+def list_yfinance_cache():
+    """
+    List all cached yfinance data with details.
+    
+    Returns:
+        pd.DataFrame: Information about cached files
+    """
+    cache_dir = 'cache/yfinance_data'
+    if not os.path.exists(cache_dir):
+        print("No yfinance cache directory found")
+        return pd.DataFrame()
+    
+    cache_info = []
+    
+    for filename in os.listdir(cache_dir):
+        if filename.endswith('.zarr'):
+            file_path = os.path.join(cache_dir, filename)
+            
+            try:
+                import xarray as xr
+                from dateutil.parser import parse
+                
+                ds = xr.open_zarr(file_path)
+                download_time = parse(ds.attrs['download_timestamp'])
+                age_hours = (datetime.now() - download_time).total_seconds() / 3600
+                
+                # Calculate size
+                size = sum(os.path.getsize(os.path.join(dp, f)) 
+                          for dp, dn, fn in os.walk(file_path) for f in fn)
+                size_mb = size / (1024 * 1024)
+                
+                cache_info.append({
+                    'filename': filename,
+                    'tickers': eval(ds.attrs.get('tickers', '[]')),
+                    'start_date': ds.attrs.get('start_date', 'unknown'),
+                    'end_date': ds.attrs.get('end_date', 'unknown'),
+                    'download_time': download_time.strftime('%Y-%m-%d %H:%M'),
+                    'age_hours': round(age_hours, 1),
+                    'size_mb': round(size_mb, 2)
+                })
+                
+            except Exception as e:
+                cache_info.append({
+                    'filename': filename,
+                    'tickers': 'error',
+                    'start_date': 'error',
+                    'end_date': 'error', 
+                    'download_time': 'error',
+                    'age_hours': 0,
+                    'size_mb': 0
+                })
+    
+    if cache_info:
+        df = pd.DataFrame(cache_info)
+        df = df.sort_values('age_hours')
+        return df
+    else:
+        return pd.DataFrame()
+
+def get_born_on_date_from_zarr(simulation_hash, tag):
+    """
+    Quick utility to get just the born_on_date from a zarr file.
+    
+    Args:
+        simulation_hash (str): Simulation hash
+        tag (str): Strategy tag
+        
+    Returns:
+        str: Born on date timestamp, or None if not found
+    """
+    zarr_filename = f'cache/simulation_{simulation_hash}_{tag}.zarr'
+    if not os.path.exists(zarr_filename):
+        return None
+    
+    try:
+        import xarray as xr
+        ds = xr.open_zarr(zarr_filename)
+        
+        # Try coordinate first (new format)
+        if 'born_on_date' in ds.coords:
+            return str(ds.coords['born_on_date'].values)
+        
+        # Fallback to attributes (backward compatibility)
+        if 'born_on_date' in ds.attrs:
+            return ds.attrs['born_on_date']
+        elif 'creation_timestamp' in ds.attrs:
+            return ds.attrs['creation_timestamp']
+            
+        return None
+        
+    except Exception as e:
+        print(f"Warning: Could not read born_on_date from {zarr_filename}: {e}")
+        return None
 
 def reconstruct_pipeline_from_metadata(simulation_hash, tag):
     """
@@ -771,15 +1284,21 @@ class EqualWeightBenchmark(BenchmarkCalculator):
             logger.warning(f"ETFs {self.etfs} not found in data columns")
             return pd.Series(0.0, index=dates)
         
-        # Filter to available ETFs
-        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        # Filter to available ETFs and ensure they're strings
+        available_etfs = [str(etf) for etf in self.etfs if str(etf) in data.columns]
+        
+        if not available_etfs:
+            logger.warning(f"No ETFs from {self.etfs} found in data columns {list(data.columns)}")
+            return pd.Series(0.0, index=dates)
         
         equal_weights = 1.0 / len(available_etfs)
         weighted_returns = data[available_etfs].mul(equal_weights, axis=1).sum(axis=1)
         return weighted_returns.reindex(dates).fillna(0)
     
     def get_description(self) -> str:
-        return f"Equal-weight portfolio of {len(self.etfs)} ETFs: {', '.join(self.etfs)}"
+        # Handle case where etfs might contain tuples or other non-string types
+        etf_names = [str(etf) for etf in self.etfs]
+        return f"Equal-weight portfolio of {len(self.etfs)} ETFs: {', '.join(etf_names)}"
 
 class SingleETFBenchmark(BenchmarkCalculator):
     """Single ETF buy-and-hold benchmark."""
@@ -793,7 +1312,12 @@ class SingleETFBenchmark(BenchmarkCalculator):
             logger.warning(f"ETF {self.etf_symbol} not found in data, using zeros")
             return pd.Series(0.0, index=dates)
         
-        return data[self.etf_symbol].reindex(dates).fillna(0)
+        # Ensure we get a Series, not DataFrame
+        etf_data = data[self.etf_symbol]
+        if isinstance(etf_data, pd.DataFrame):
+            # If we got a DataFrame, take the first (and should be only) column
+            etf_data = etf_data.iloc[:, 0]
+        return etf_data.reindex(dates).fillna(0)
     
     def get_description(self) -> str:
         return f"Buy-and-hold {self.etf_symbol}"
@@ -810,8 +1334,13 @@ class RiskParityBenchmark(BenchmarkCalculator):
             logger.warning(f"ETFs {self.etfs} not found in data columns")
             return pd.Series(0.0, index=dates)
         
-        # Filter to available ETFs
-        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        # Filter to available ETFs and ensure they're strings
+        available_etfs = [str(etf) for etf in self.etfs if str(etf) in data.columns]
+        
+        if not available_etfs:
+            logger.warning(f"No ETFs from {self.etfs} found in data columns {list(data.columns)}")
+            return pd.Series(0.0, index=dates)
+        
         etf_data = data[available_etfs]
         
         # Calculate rolling volatilities
@@ -845,8 +1374,8 @@ class LongShortRandomBenchmark(BenchmarkCalculator):
             logger.warning(f"ETFs {self.etfs} not found in data columns")
             return pd.Series(0.0, index=dates)
         
-        # Filter to available ETFs
-        available_etfs = [etf for etf in self.etfs if etf in data.columns]
+        # Filter to available ETFs and ensure they're strings
+        available_etfs = [str(etf) for etf in self.etfs if str(etf) in data.columns]
         
         np.random.seed(self.random_seed)
         returns = []
@@ -918,8 +1447,11 @@ class BenchmarkManager:
         benchmarks['spy_only'] = SingleETFBenchmark('SPY', self.config)
         
         if self.strategy_type == 'equal_weight':
+            # Use feature_etfs for equal-weight benchmark (not all_etfs)
+            if self.feature_etfs:
+                benchmarks['equal_weight_features'] = EqualWeightBenchmark(self.feature_etfs, self.config)
+            # Use all_etfs for comprehensive benchmark
             benchmarks['equal_weight_all'] = EqualWeightBenchmark(self.all_etfs, self.config)
-            benchmarks['vti_market'] = SingleETFBenchmark('VTI', self.config)
             
         elif self.strategy_type == 'confidence_weighted':
             benchmarks['risk_parity'] = RiskParityBenchmark(self.target_etfs, self.config)
@@ -954,7 +1486,7 @@ class BenchmarkManager:
                 logger.info(f"Calculated benchmark: {name} - {calculator.get_description()}")
             except Exception as e:
                 logger.error(f"Failed to calculate benchmark {name}: {str(e)}")
-                benchmark_returns[f'benchmark_{name}'] = pd.Series(0.0, index=dates)
+                raise RuntimeError(f"Benchmark calculation failed for {name}: {str(e)}")
         
         return pd.DataFrame(benchmark_returns, index=dates)
     
@@ -1946,7 +2478,7 @@ def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str],
 
 def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type, 
                         pipe_steps={}, param_grid={}, tag=None, position_func=None, position_params=[], 
-                        use_cache=None, benchmark_config: BenchmarkConfig = None):
+                        use_cache=None, force_retrain=False, benchmark_config: BenchmarkConfig = None):
     """
     Multi-target walk-forward simulation engine with caching and configurable training frequency.
     
@@ -1962,6 +2494,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         position_func: Function to convert predictions to positions
         position_params: Parameters for position function
         use_cache: Whether to use cached results if available
+        force_retrain: If True, ignore cached results and retrain models
     
     Returns:
         DataFrame with predictions, actuals, and portfolio performance
@@ -1972,12 +2505,16 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         position_func, position_params, train_frequency
     )
     
-    # Try to load cached results first
-    if use_cache:
-        cached_result, metadata = load_simulation_results(simulation_hash, tag)
+    # Try to load cached results first (unless force_retrain is True)
+    if use_cache and not force_retrain:
+        cached_result, cached_metadata = load_simulation_results(simulation_hash, tag)
         if cached_result is not None and not cached_result.empty:
             logger.info(f"Using cached results for {tag}")
-            return cached_result
+            return cached_result, simulation_hash
+    elif force_retrain:
+        logger.info(f"force_retrain=True, skipping cache for {tag} and running fresh simulation")
+    else:
+        logger.info(f"use_cache=False, running fresh simulation for {tag}")
     
     # Setup benchmarking
     if benchmark_config is None:
@@ -2009,6 +2546,13 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         logger.warning(f"Not enough data for multi-target simulation '{tag}' with window size {window_size}")
         logger.warning(f"Required data points: >{window_size}, Data points available: {len(X)}")
         return pd.DataFrame()
+    
+    # Log actual data range being used for fresh simulation
+    first_date = date_ranges[0][2]  # First prediction date
+    last_date = date_ranges[-1][2]  # Last prediction date
+    logger.info(f"Fresh simulation for {tag}: prediction range {first_date} to {last_date} ({len(date_ranges)} predictions)")
+    logger.info(f"X data range: {X.index.min()} to {X.index.max()}")
+    logger.info(f"y_multi data range: {y_multi.index.min()} to {y_multi.index.max()}")
 
     # Set up multi-target pipeline
     fit_obj = Pipeline(steps=pipe_steps)
@@ -2078,8 +2622,37 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     # Calculate comprehensive benchmarks
     try:
         # Reconstruct the original returns data for benchmarking
-        all_returns_data = pd.concat([X, y_multi.shift(1)], axis=1).dropna()
-        benchmark_returns = benchmark_manager.calculate_all_benchmarks(all_returns_data, regout.index)
+        # We need current period returns for benchmarks, not shifted
+        logger.info(f"X shape: {X.shape}, y_multi shape: {y_multi.shape}")
+        logger.info(f"X columns: {list(X.columns)}")
+        logger.info(f"y_multi columns: {list(y_multi.columns)}")
+        
+        # For benchmarking, we need the actual returns data, not predictions
+        # Combine features and targets for comprehensive benchmark data
+        all_returns_data = pd.concat([X, y_multi], axis=1).dropna()
+        logger.info(f"Combined data shape: {all_returns_data.shape}, columns: {list(all_returns_data.columns)}")
+        
+        # Verify target ETFs are available in the data
+        available_targets = [col for col in target_etfs if col in all_returns_data.columns]
+        available_features = [col for col in feature_etfs if col in all_returns_data.columns] 
+        logger.info(f"Available target ETFs for benchmarks: {available_targets}")
+        logger.info(f"Available feature ETFs for benchmarks: {available_features}")
+        
+        if not available_targets:
+            raise ValueError(f"No target ETFs ({target_etfs}) found in benchmark data columns: {list(all_returns_data.columns)}")
+        
+        # Align benchmark data with regout index (use only overlapping dates)
+        benchmark_dates = all_returns_data.index.intersection(regout.index)
+        aligned_data = all_returns_data.loc[benchmark_dates]
+        logger.info(f"Benchmark data aligned to {len(benchmark_dates)} overlapping dates")
+        
+        # Debug: log data types and shapes before benchmark calculation
+        logger.info(f"About to calculate benchmarks with data types:")
+        for col in aligned_data.columns:
+            col_data = aligned_data[col]
+            logger.info(f"  {col}: {type(col_data)}, shape: {getattr(col_data, 'shape', 'N/A')}")
+        
+        benchmark_returns = benchmark_manager.calculate_all_benchmarks(aligned_data, benchmark_dates)
         
         # Add benchmark columns to results
         for col in benchmark_returns.columns:
@@ -2093,7 +2666,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
             
     except Exception as e:
         logger.error(f"Failed to calculate comprehensive benchmarks: {str(e)}")
-        logger.info("Continuing with legacy benchmark only")
+        raise RuntimeError(f"Comprehensive benchmark calculation failed: {str(e)}")
 
     # Remove rows with NaN values
     regout_clean = regout.dropna()
@@ -2103,7 +2676,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         save_simulation_results(regout_clean, simulation_hash, tag, metadata)
 
     logger.info(f"Multi-target simulation for {tag} complete.")
-    return regout_clean
+    return regout_clean, simulation_hash
 
 
 def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[str], 
@@ -2128,11 +2701,8 @@ def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[st
     logger.info(f"Target ETFs: {target_etfs}")
     
     try:
-        all_etf_closing_prices_df = yf.download(etf_list, start=start_date)['Close']
-        if all_etf_closing_prices_df.empty:
-            raise ValueError("No data downloaded from Yahoo Finance")
-        
-        etf_log_returns_df = log_returns(all_etf_closing_prices_df).dropna()
+        # Use cached download function to avoid API limits
+        etf_log_returns_df = download_etf_data_with_cache(etf_list, start_date=start_date)
         
         if etf_log_returns_df.empty:
             raise ValueError("No valid returns data after processing")
@@ -2142,13 +2712,18 @@ def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[st
         raise ValueError(f"Data download failed: {str(e)}")
 
     # Set timezone and align timestamps
-    # Handle case where index doesn't have timezone info
-    if etf_log_returns_df.index.tz is None:
-        etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York')
+    # Ensure we have a proper datetime index
+    if not isinstance(etf_log_returns_df.index, pd.DatetimeIndex):
+        etf_log_returns_df.index = pd.to_datetime(etf_log_returns_df.index)
     
-    etf_log_returns_df.index = etf_log_returns_df.index.map(
-        lambda x: x.replace(hour=16, minute=00)
-    ).tz_convert('UTC')
+    # Handle timezone - keep it simple to avoid conversion issues
+    if etf_log_returns_df.index.tz is None:
+        # If no timezone, assume UTC and don't convert
+        etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('UTC')
+    elif etf_log_returns_df.index.tz != pytz.UTC:
+        # If different timezone, convert to UTC
+        etf_log_returns_df.index = etf_log_returns_df.index.tz_convert('UTC')
+    
     etf_log_returns_df.index.name = 'teo'
     
     # Create features (day t) and targets (day t+1)
@@ -2165,10 +2740,26 @@ def load_and_prepare_multi_target_data(etf_list: List[str], target_etfs: List[st
     
     # Create feature matrix (exclude target ETFs from features)
     feature_etfs = [etf for etf in etf_list if etf not in target_etfs]
-    X = etf_features_df[feature_etfs]
     
-    # Create multi-target matrix
-    y_multi = etf_targets_df[target_etfs]
+    # Handle tuple column names - find columns that match the feature ETFs
+    feature_cols = []
+    for etf in feature_etfs:
+        # Look for columns that contain the ETF name
+        matching_cols = [col for col in etf_features_df.columns if etf in col]
+        if matching_cols:
+            feature_cols.extend(matching_cols)
+    
+    X = etf_features_df[feature_cols]
+    
+    # Create multi-target matrix - handle tuple column names
+    target_cols = []
+    for etf in target_etfs:
+        # Look for columns that contain the ETF name
+        matching_cols = [col for col in etf_targets_df.columns if etf in col]
+        if matching_cols:
+            target_cols.extend(matching_cols)
+    
+    y_multi = etf_targets_df[target_cols]
     
     # Validate data quality
     print("Validating data quality...")
@@ -2442,6 +3033,30 @@ def plot_cumulative_returns_xarray(regout_list, sweep_tags, config):
     return cumulative_returns_data
 
 
+def setup_session_logging(timestamp):
+    """Set up additional session-specific logging for this simulation run."""
+    from pathlib import Path
+    import logging.handlers
+    
+    log_dir = Path("logs")
+    session_log_file = log_dir / f"simulation_{timestamp}.log"
+    
+    # Create session-specific handler
+    session_handler = logging.FileHandler(session_log_file)
+    session_handler.setLevel(logging.DEBUG)
+    
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    session_handler.setFormatter(formatter)
+    
+    # Add to root logger
+    logging.getLogger().addHandler(session_handler)
+    
+    logger.info(f"Session log created: {session_log_file}")
+    return session_log_file
+
 def main():
     """
     Main execution function for multi-target ETF prediction simulation.
@@ -2453,18 +3068,21 @@ def main():
         'window_size': 400,  # Training window size
         'window_type': 'expanding',  # 'expanding' or 'rolling'
         'start_date': '2010-01-01',  # Data start date
-        'use_cache': True,
-        'force_retrain': False,
+        'use_cache': False,
+        'force_retrain': True,
         'csv_output_dir': '/Volumes/ext_2t/ERM3_Data/stock_data/csv'  # External drive CSV directory
     }
     
-    # Force cache usage for quick results
-    config['use_cache'] = True
-    config['force_retrain'] = False
+    # Completely disable cache to debug date issue
+    config['use_cache'] = False
+    config['force_retrain'] = True
     
     # Create timestamp for this run
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     config['run_timestamp'] = timestamp
+    
+    # Set up session-specific logging
+    session_log_file = setup_session_logging(timestamp)
     
     print("Configuration:")
     for key, value in config.items():
@@ -2526,6 +3144,7 @@ def main():
     # Run simulations
     regout_list = []
     sweep_tags = []
+    simulation_hashes = []  # Track hashes for born_on_date retrieval
     
     for i, strategy in enumerate(strategy_combinations):
         print(f"--- Strategy {i+1}/{len(strategy_combinations)}: {strategy['tag']} ---")
@@ -2537,7 +3156,7 @@ def main():
                 rebalancing_frequency='monthly'
             )
             
-            regout_df = Simulate_MultiTarget(
+            regout_df, sim_hash = Simulate_MultiTarget(
                 X, y_multi, config['train_frequency'],
                 window_size=config['window_size'],
                 window_type=config['window_type'],
@@ -2547,12 +3166,14 @@ def main():
                 position_func=strategy['position_func'],
                 position_params=strategy['position_params'],
                 use_cache=config['use_cache'],
+                force_retrain=config['force_retrain'],
                 benchmark_config=benchmark_config
             )
             
             if not regout_df.empty:
                 regout_list.append(regout_df)
                 sweep_tags.append(strategy['tag'])
+                simulation_hashes.append(sim_hash)
                 
                 # Save individual strategy results to CSV
                 csv_filename = f"{timestamp}_{strategy['tag']}_results.csv"
@@ -2563,8 +3184,9 @@ def main():
                 print(f"    Warning: No results for {strategy['tag']}")
                 
         except Exception as e:
+            logger.error(f"Strategy {strategy['tag']} failed: {str(e)}")
             print(f"    Error in strategy {strategy['tag']}: {str(e)}")
-            continue
+            raise RuntimeError(f"Strategy {strategy['tag']} failed: {str(e)}") from e
     
     print(f"\nCompleted {len(regout_list)} successful simulations out of {len(strategy_combinations)} total strategies.")
     
@@ -2624,10 +3246,29 @@ def main():
             
             # Create individual strategy vs benchmark plots
             print("📊 Creating individual plots...")
-            for regout_df, tag in zip(regout_list, sweep_tags):
+            # Ensure we have matching lengths (simulation_hashes might be shorter if some failed)
+            plot_data = list(zip(regout_list, sweep_tags, simulation_hashes + [None] * len(regout_list)))
+            for regout_df, tag, sim_hash in plot_data[:len(regout_list)]:
                 benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
                 if benchmark_cols:
-                    plot_path = plot_strategy_vs_benchmarks(regout_df, tag, config)
+                    # Load metadata to get born_on_date (use quick access first)
+                    born_on_date = None
+                    if sim_hash:
+                        try:
+                            # Try quick coordinate access first
+                            born_on_date = get_born_on_date_from_zarr(sim_hash, tag)
+                            if born_on_date:
+                                print(f"📅 Using born_on_date from coordinate: {born_on_date[:19]}")
+                            else:
+                                # Fallback to full metadata load
+                                _, metadata = load_simulation_results(sim_hash, tag)
+                                if metadata:
+                                    born_on_date = metadata['simulation_info']['creation_timestamp']
+                                    print(f"📅 Using born_on_date from metadata: {born_on_date[:19]}")
+                        except Exception as e:
+                            print(f"⚠️ Could not load born_on_date for {tag}: {e}")
+                    
+                    plot_path = plot_strategy_vs_benchmarks(regout_df, tag, config, born_on_date)
                     print(f"📊 Individual plot for {tag}: {plot_path}")
                     if plot_path:
                         logger.info(f"📈 Strategy benchmark plot created: {plot_path}")
@@ -2654,6 +3295,14 @@ def main():
         # Final output summary with all file links
         print(f"\n🎉 All simulation results and analysis saved to: {config['csv_output_dir']}")
         print(f"\nRun ID: {timestamp}")
+        
+        # Show logging file locations
+        logs_dir = os.path.abspath('logs/')
+        print(f"\n📝 Logging Files:")
+        print(f"  🗂️  Main log: {logs_dir}/multi_target_simulator.log")
+        print(f"  🚨 Error log: {logs_dir}/errors.log")
+        print(f"  📋 Session log: {logs_dir}/simulation_{timestamp}.log")
+        
         print("\n📁 Generated Files:")
         print(f"  📊 Individual strategy results: {timestamp}_[strategy_name]_results.csv")
         print(f"  📈 Performance summary: {timestamp}_performance_summary.csv")
@@ -2712,7 +3361,7 @@ def display_performance_summary_table(regout_list, sweep_tags):
                     elif strategy_type == 'confidence_weighted':
                         priority_benchmarks = ['benchmark_risk_parity', 'benchmark_spy_only', 'benchmark_equal_weight_targets']
                     else:  # equal_weight
-                        priority_benchmarks = ['benchmark_spy_only', 'benchmark_equal_weight_targets', 'benchmark_vti_market']
+                        priority_benchmarks = ['benchmark_spy_only', 'benchmark_equal_weight_targets', 'benchmark_equal_weight_features']
                     
                     best_info_ratio = -np.inf
                     

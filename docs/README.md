@@ -321,7 +321,7 @@ Based on historical backtests using Blue Water Macro's methodology (2015-2024):
 - **Code Comments**: Detailed inline explanations throughout codebase
 
 ### Academic Guidance
-- **Office Hours**: Contact [Conrad.Gann@BlueWaterMacro.com] for capstone project guidance
+- **Office Hours**: Contact [Capstone@BlueWaterMacro.com] for capstone project guidance
 - **Collaboration**: Connect with other students on QuantNet forums
 - **Industry Mentorship**: Blue Water Macro internship and career opportunities
 

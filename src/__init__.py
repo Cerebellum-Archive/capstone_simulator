@@ -17,7 +17,7 @@ License: Blue Water Macro Educational License (BWMEL)
 
 __version__ = "0.1.0"
 __author__ = "Conrad Gann"
-__email__ = "Conrad.Gann@BlueWaterMacro.com"
+__email__ = "Capstone@BlueWaterMacro.com"
 __license__ = "Blue Water Macro Educational License (BWMEL)"
 
 # Import main modules for easy access

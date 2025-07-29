@@ -25,6 +25,9 @@ A hands-on educational platform for **financial engineering students** to develo
 - [Framework Components](#framework-components)
 - [Model Complexity Scoring & Overfitting Detection](#-model-complexity-scoring--overfitting-detection)
 - [Example Workflow](#example-workflow-full-research-cycle)
+- [Hash-Based Future Testing Tutorial](#-tutorial-hash-based-future-testing)
+- [Modern Hash Storage & Out-of-Sample Testing](#-modern-hash-storage--out-of-sample-testing)
+- [Intelligent yfinance Caching System](#-intelligent-yfinance-caching-system)
 - [Student Exercises & Capstone Ideas](#student-exercises--capstone-ideas)
 - [Performance Expectations](#performance-expectations)
 - [Educational Resources](#educational-resources)
@@ -163,6 +166,20 @@ print(f"Complexity-Adjusted Sharpe: {adj_metrics['complexity_adjusted_sharpe']:.
 print(f"Overfitting Risk: {1 - adj_metrics['overfitting_penalty']:.1%}")
 ```
 
+### Avoid yfinance API Limits with Smart Caching
+```python
+from src.multi_target_simulator import download_etf_data_with_cache, list_yfinance_cache
+
+# Download with automatic caching (eliminates "ETF not found" warnings)
+data = download_etf_data_with_cache(['SPY', 'QQQ', 'IWM'], start_date='2020-01-01')
+print(f"Downloaded {data.shape[0]} days of data for {data.shape[1]} ETFs")
+
+# View your cached datasets
+list_yfinance_cache()  # Shows tickers, dates, file sizes, and ages
+
+# All simulations automatically use cached data - no more API limits!
+```
+
 ## Repository Structure
 
 ```
@@ -275,6 +292,142 @@ results_xr.plot.line(x='time', col='strategy', col_wrap=2)
 
 See `notebooks/03_full_research_cycle.ipynb` for a complete implementation.
 
+## 🕐 Tutorial: Hash-Based Future Testing
+
+This tutorial demonstrates the **killer feature** of the framework: running your exact historical strategy on future data to test true out-of-sample performance.
+
+### Step-by-Step: Today's Strategy, Tomorrow's Data
+
+#### Phase 1: Run Initial Strategy (January 2025)
+```python
+# Run your strategy on historical data (2020-2024)
+from src.multi_target_simulator import run_simulation
+
+results = run_simulation(
+    target_etfs=['SPY', 'QQQ', 'IWM'],
+    feature_etfs=['XLK', 'XLF', 'XLV', 'XLY', 'XLP'],
+    model='RandomForestRegressor',
+    params={'n_estimators': 100, 'max_depth': 5},
+    training_window_size=400,
+    position_sizer='confidence_weighted',
+    start_date='2020-01-01',
+    end_date='2024-12-31'
+)
+
+# Note the hash for future use
+strategy_hash = results['simulation_hash']
+print(f"Strategy Hash: {strategy_hash}")
+print(f"Trained on: 2020-2024")
+print(f"In-Sample Sharpe: {results['sharpe_ratio']:.2f}")
+
+# Hash stored automatically: cache/simulation_{hash}_multi_target.zarr
+```
+
+#### Phase 2: Wait for New Data (June 2025)
+```python
+# 6 months later... new market data is available
+# Your strategy parameters are perfectly preserved in the hash
+
+from src.multi_target_simulator import reconstruct_pipeline_from_metadata, run_reconstructed_pipeline
+
+# Reconstruct EXACT same pipeline from hash
+pipeline_config = reconstruct_pipeline_from_metadata(
+    simulation_hash=strategy_hash,  # From January
+    tag='multi_target'
+)
+
+print("Reconstructed Strategy:")
+print(f"Model: {pipeline_config['model']}")
+print(f"Parameters: {pipeline_config['params']}")
+print(f"Training Window: {pipeline_config['training_window_size']}")
+print(f"Original Born Date: {pipeline_config['born_on_date']}")
+```
+
+#### Phase 3: Test on Truly Unseen Data
+```python
+# Download completely new data (2025 Q1-Q2)
+from src.utils_simulate import download_etf_data, prepare_features_targets
+
+new_data = download_etf_data(
+    tickers=['SPY', 'QQQ', 'IWM', 'XLK', 'XLF', 'XLV', 'XLY', 'XLP'],
+    start_date='2025-01-01',  # Data the model has NEVER seen
+    end_date='2025-06-30'
+)
+
+X_new, y_new = prepare_features_targets(new_data, pipeline_config)
+
+# Run EXACT same strategy on new data
+oos_results = run_reconstructed_pipeline(pipeline_config, X_new, y_new)
+
+print("\n=== OUT-OF-SAMPLE RESULTS ===")
+print(f"Original Sharpe (2020-2024): {results['sharpe_ratio']:.2f}")
+print(f"Out-of-Sample Sharpe (2025): {oos_results['sharpe_ratio']:.2f}")
+print(f"Strategy Robustness: {oos_results['sharpe_ratio']/results['sharpe_ratio']:.1%}")
+
+# If robustness > 80%, strategy shows genuine alpha
+# If robustness < 50%, likely overfitted to historical data
+```
+
+#### Phase 4: Generate Comparative Report
+```python
+# Create side-by-side performance analysis
+from src.plotting_utils import create_performance_tearsheet
+
+# Generate report showing in-sample vs out-of-sample
+create_performance_tearsheet(
+    in_sample_results=results,
+    out_of_sample_results=oos_results,
+    strategy_hash=strategy_hash,
+    title="Strategy Robustness Analysis: Jan 2025 vs Jun 2025"
+)
+
+# PDF report includes:
+# - Vertical line at born_on_date (when strategy was created)
+# - Cumulative returns showing strategy decay/persistence
+# - Risk metrics comparison (Sharpe, Calmar, Max Drawdown)
+# - Statistical significance tests
+```
+
+### Real-World Applications
+
+**🎓 Academic Research**: 
+```python
+# Thesis defense: "I trained this strategy in January, here's how it performed 
+# on unseen March data with no modifications"
+```
+
+**🏛️ Institutional Validation**: 
+```python
+# Hedge fund presentation: "Our model shows 85% robustness over 6-month 
+# out-of-sample period, indicating genuine alpha discovery"
+```
+
+**📊 Strategy Monitoring**:
+```python
+# Monthly strategy review: Compare current performance against 
+# original hash to detect strategy decay
+```
+
+### Advanced Hash Management
+
+```python
+# List all historical strategies
+from src.multi_target_simulator import list_cached_simulations
+
+strategies = list_cached_simulations()
+for hash_id, metadata in strategies.items():
+    print(f"Hash: {hash_id}")
+    print(f"Created: {metadata['born_on_date']}")
+    print(f"Model: {metadata['model']}")
+    print(f"Performance: {metadata.get('sharpe_ratio', 'N/A')}")
+    print("---")
+
+# Clean up old experiments
+cleanup_old_hashes(older_than_days=90)
+```
+
+This workflow represents **institutional-grade strategy validation** - the same process used by quantitative hedge funds to distinguish genuine alpha from statistical noise.
+
 ## 📖 Offline PDF Tutorial
 
 For comprehensive offline study, we provide multiple options:
@@ -320,6 +473,200 @@ python scripts/generate_html_tutorial.py
 3. **Risk Management**: Implement VaR-based position limits and drawdown controls
 4. **Alternative Data**: Integrate sentiment analysis or economic indicators
 5. **Portfolio Optimization**: Apply Modern Portfolio Theory for asset allocation
+
+## 💾 Modern Hash Storage & Out-of-Sample Testing
+
+The framework uses **xarray.zarr format** for intelligent caching and complete reproducibility. Every simulation generates a unique hash based on all parameters (data sources, model configuration, training windows, etc.) and stores both results and complete metadata for future reconstruction.
+
+### Zarr-Based Hash Storage System
+
+```python
+# Automatic hash generation and storage
+from src.multi_target_simulator import run_simulation
+
+# Run initial simulation (automatically cached)
+results = run_simulation(
+    target_etfs=['SPY', 'QQQ'], 
+    model='RandomForestRegressor',
+    params={'n_estimators': 100},
+    training_window_size=400
+)
+
+# Hash automatically generated: simulation_a1b2c3d4_multi_target.zarr
+print(f"Simulation hash: {results['simulation_hash']}")
+```
+
+### True Out-of-Sample Testing
+
+The revolutionary feature is **pipeline reconstruction from hash files** - allowing you to test how your **exact same strategy** performs on completely new, unseen data:
+
+```python
+from src.multi_target_simulator import reconstruct_pipeline_from_metadata, run_reconstructed_pipeline
+
+# 1. Reconstruct the EXACT pipeline from hash
+pipeline_config = reconstruct_pipeline_from_metadata(
+    simulation_hash='a1b2c3d4',  # From your original run
+    tag='multi_target'
+)
+
+# 2. Test on completely new data (e.g., 2025 data when original was 2020-2024)
+new_data = download_etf_data(['SPY', 'QQQ'], start_date='2025-01-01')
+X_new, y_new = prepare_features_targets(new_data)
+
+# 3. Run EXACT same strategy on new data
+oos_results = run_reconstructed_pipeline(pipeline_config, X_new, y_new)
+
+# 4. Compare performance: original vs out-of-sample
+print(f"Original Sharpe: {original_sharpe:.2f}")
+print(f"Out-of-Sample Sharpe: {oos_sharpe:.2f}")
+print(f"Strategy robustness: {oos_sharpe/original_sharpe:.1%}")
+```
+
+### Complete Metadata Preservation
+
+Each zarr file contains **everything needed** for perfect reproduction:
+
+```python
+# Load any historical simulation
+results_df, metadata = load_simulation_results('a1b2c3d4', 'multi_target')
+
+print(metadata['born_on_date'])        # '2025-01-15T10:30:45'
+print(metadata['target_etfs'])         # ['SPY', 'QQQ']
+print(metadata['model_pipeline'])      # 'Pipeline([('ewm', EWMTransformer(halflife=5)), ...]'
+print(metadata['training_window'])     # 400
+print(metadata['data_fingerprint'])    # Hash of exact data used
+print(metadata['framework_version'])   # '2.1.0'
+```
+
+### Easy Born-on-Date Access
+
+The `born_on_date` is now stored as an **xarray coordinate** for lightning-fast access:
+
+```python
+# Quick access without loading full metadata
+from src.multi_target_simulator import get_born_on_date_from_zarr
+born_date = get_born_on_date_from_zarr('a1b2c3d4', 'multi_target')
+print(f"Strategy created: {born_date}")  # '2025-01-15T10:30:45'
+
+# Direct xarray coordinate access
+import xarray as xr
+ds = xr.open_zarr('cache/simulation_a1b2c3d4_multi_target.zarr')
+print(f"Born on: {ds.coords['born_on_date'].values}")  # Ultra-fast!
+
+# Perfect for filtering or plotting
+strategies_by_date = {
+    hash_id: str(ds.coords['born_on_date'].values) 
+    for hash_id in strategy_hashes
+}
+```
+
+### Institutional-Grade Benefits
+
+This approach mirrors **hedge fund practices** where strategies must prove robustness across time periods:
+
+- **🎯 Overfitting Detection**: Compare in-sample vs out-of-sample performance
+- **📊 Strategy Decay Analysis**: Track how performance changes over time
+- **🔄 Reproducible Research**: Share exact configurations with colleagues
+- **🏛️ Regulatory Compliance**: Complete audit trail for institutional use
+- **📈 Production Deployment**: Test strategies before live trading
+
+## 🌐 Intelligent yfinance Caching System
+
+The framework includes a comprehensive **yfinance caching system** using zarr format to eliminate API rate limiting issues during development and research. This system automatically caches all ETF downloads, dramatically improving workflow efficiency.
+
+### Automatic Cache Management
+
+```python
+from src.multi_target_simulator import download_etf_data_with_cache
+
+# Automatic caching with configurable age limits
+data = download_etf_data_with_cache(
+    tickers=['SPY', 'QQQ', 'IWM'],
+    start_date='2020-01-01',
+    max_age_hours=24  # Refresh cache after 24 hours
+)
+
+# First run: Downloads from yfinance and caches
+# Subsequent runs: Uses cached data (lightning fast!)
+```
+
+### Cache Benefits & Features
+
+**🚀 Performance Improvements:**
+- **Instant Re-runs**: Cached data loads in milliseconds vs minutes for downloads
+- **API Limit Protection**: Eliminates "ETF not found, using zeros" warnings
+- **Offline Development**: Work without internet once data is cached
+- **Batch Processing**: Run multiple simulations without API restrictions
+
+**💾 Smart Storage:**
+```python
+# Cache files stored in: cache/yfinance_data/
+# Example: yf_SPY_QQQ_IWM_2020-01-01_2025-07-29.zarr
+
+# Cache management utilities
+from src.multi_target_simulator import list_yfinance_cache, clean_yfinance_cache
+
+# View all cached datasets
+list_yfinance_cache()
+# Output shows: tickers, date ranges, file sizes, ages
+
+# Clean old cache files (saves disk space)
+clean_yfinance_cache(max_age_days=7)  # Remove files older than 7 days
+```
+
+**🔧 Technical Architecture:**
+- **Multi-Ticker Support**: Handles both single and multi-asset downloads seamlessly
+- **Column Structure Preservation**: Maintains proper yfinance MultiIndex format
+- **Metadata Tracking**: Stores download timestamps, ticker lists, date ranges
+- **Error Recovery**: Graceful handling of individual ticker failures
+- **Memory Efficient**: Zarr format with compression for large datasets
+
+### Integration with Simulations
+
+Both simulation engines automatically use the caching system:
+
+```python
+# Single-target simulator with caching
+from src.single_target_simulator import load_and_prepare_data
+X, y = load_and_prepare_data(['SPY', 'QQQ'], target_etf='SPY', start_date='2020-01-01')
+# Uses cached data if available, downloads if needed
+
+# Multi-target simulator with caching  
+from src.multi_target_simulator import Simulate_MultiTarget
+results = Simulate_MultiTarget(
+    target_etfs=['SPY', 'QQQ', 'IWM'],
+    feature_etfs=['XLK', 'XLF', 'XLV'],
+    start_date='2020-01-01'
+)
+# All ETF downloads automatically cached
+```
+
+### Real-World Workflow Benefits
+
+**🎓 Educational Use Cases:**
+```python
+# Students can experiment freely without API limits
+for window_size in [200, 400, 600]:
+    for model in ['ridge', 'rf', 'xgb']:
+        results = run_simulation(window_size=window_size, model=model)
+        # Each run reuses cached data - no download delays!
+```
+
+**🏛️ Research Applications:**
+```python
+# Researchers can iterate rapidly on strategy development
+# Cache eliminates the "download bottleneck" in quantitative research
+results_list = []
+for strategy_config in strategy_grid:
+    results = backtest_strategy(strategy_config)  # Instant data access
+    results_list.append(results)
+```
+
+**⚡ Production Benefits:**
+- **Consistent Data**: Same cached dataset ensures reproducible results
+- **Fast Prototyping**: Rapid strategy iteration without download delays  
+- **Offline Capability**: Continue working during network outages
+- **Cost Efficiency**: Reduces API usage for institutional subscriptions
 
 ## 🔬 Benefits of Enhanced Reproducibility
 
@@ -448,7 +795,7 @@ pip install --upgrade yfinance requests
 - **Code Comments**: Detailed inline explanations throughout codebase
 
 ### Academic Guidance
-- **Office Hours**: Contact [Conrad.Gann@BlueWaterMacro.com] for capstone project guidance
+- **Office Hours**: Contact [Capstone@BlueWaterMacro.com] for capstone project guidance
 - **Collaboration**: Connect with other students on QuantNet forums
 - **Industry Mentorship**: Blue Water Macro internship and career opportunities
 
