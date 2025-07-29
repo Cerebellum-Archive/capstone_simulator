@@ -140,6 +140,9 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 
+# Claude AI files
+.claude/
+
 # Project specific
 reports/
 cache/
