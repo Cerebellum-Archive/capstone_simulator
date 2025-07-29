@@ -12,6 +12,10 @@ jupyter>=1.0.0
 notebook>=6.4.0
 plotly>=5.0.0
 
+# Testing framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
 # PDF Generation (optional)
 markdown>=3.4.0
 weasyprint>=66.0

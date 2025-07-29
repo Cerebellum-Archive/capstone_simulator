@@ -1,0 +1,129 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capstone-simulator"
+version = "0.1.0"
+description = "Updated quantitative trading simulation framework for backtesting strategies using Python, ideal for financial engineering education and research"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Blue Water Macro Educational License (BWMEL)"}
+authors = [
+    {name = "Conrad Gann", email = "Conrad.Gann@BlueWaterMacro.com"},
+]
+maintainers = [
+    {name = "Conrad Gann", email = "Conrad.Gann@BlueWaterMacro.com"},
+]
+keywords = [
+    "quantitative-trading",
+    "backtesting", 
+    "python",
+    "etfs",
+    "financial-engineering",
+    "machine-learning",
+    "portfolio-optimization",
+    "xarray",
+    "educational-framework",
+    "blue-water-macro"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Education",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.21.0",
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",
+    "xarray>=0.19.0",
+    "yfinance>=0.1.70",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",
+    "jupyter>=1.0.0",
+    "notebook>=6.4.0",
+    "plotly>=5.0.0",
+    "scipy>=1.7.0",
+    "statsmodels>=0.13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.910",
+    "isort>=5.10",
+]
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+    "nbsphinx>=0.8",
+]
+plotting = [
+    "kaleido>=0.2.1",
+    "plotly>=5.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Cerebellum-Archive/capstone_simulator"
+Documentation = "https://github.com/Cerebellum-Archive/capstone_simulator/blob/main/README.md"
+Repository = "https://github.com/Cerebellum-Archive/capstone_simulator.git"
+"Bug Tracker" = "https://github.com/Cerebellum-Archive/capstone_simulator/issues"
+"Blue Water Macro" = "https://bluewatermacro.com"
+
+[project.scripts]
+capstone-single-target = "capstone_simulator.single_target_simulator:main"
+capstone-multi-target = "capstone_simulator.multi_target_simulator:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"capstone_simulator" = "src"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | cache
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+skip_glob = ["cache/*", "*.pkl"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "cache/",
+    "archive_old_structure/",
+]

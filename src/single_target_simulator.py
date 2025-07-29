@@ -32,6 +32,9 @@ How to Use:
 import os
 import warnings
 import logging
+import sys
+import pickle
+import hashlib
 from datetime import datetime
 import time
 import pytz
@@ -78,6 +81,193 @@ from utils_simulate import (
 # Professional plotting utilities
 from plotting_utils import create_tear_sheet, create_simple_comparison_plot
 
+
+# --- Enhanced Metadata and Caching System ---
+
+def generate_simulation_metadata(X, y, window_size, window_type, pipe_steps, param_grid, 
+                               tag, etf_symbols=None, target_etf=None, start_date=None, 
+                               random_seed=None, feature_engineering_steps=None):
+    """
+    Generate comprehensive metadata for full single-target simulation reconstruction.
+    
+    This enhanced version stores all information needed to perfectly reproduce
+    a single-target simulation, enabling full reproducibility and audit trails.
+    
+    Educational Note:
+        Reproducibility is crucial in quantitative finance for:
+        1. Regulatory compliance and audit requirements
+        2. Model validation and backtesting verification  
+        3. Research collaboration and peer review
+        4. Production deployment confidence
+    
+    Args:
+        X (pd.DataFrame): Feature matrix
+        y (pd.Series): Target variable  
+        window_size (int): Training window size
+        window_type (str): 'expanding' or 'rolling'
+        pipe_steps (list): sklearn Pipeline steps
+        param_grid (dict): Model hyperparameters
+        tag (str): Simulation identifier
+        etf_symbols (list, optional): ETF symbols used as features
+        target_etf (str, optional): ETF symbol used as target
+        start_date (str, optional): Data start date
+        random_seed (int, optional): Random seed for reproducibility
+        feature_engineering_steps (dict, optional): Feature preprocessing metadata
+        
+    Returns:
+        dict: Complete simulation metadata for reconstruction
+    """
+    metadata = {
+        # Data source information for reconstruction
+        'data_source': {
+            'etf_symbols': etf_symbols,
+            'target_etf': target_etf,
+            'start_date': start_date,
+            'end_date': X.index[-1].strftime('%Y-%m-%d') if hasattr(X.index[-1], 'strftime') else str(X.index[-1]),
+            'data_shapes': {
+                'X_shape': X.shape, 
+                'y_shape': y.shape,
+                'feature_columns': list(X.columns),
+                'target_name': y.name if hasattr(y, 'name') else 'target'
+            },
+            'data_fingerprint': {
+                'X_head_hash': hashlib.md5(str(X.head().values).encode()).hexdigest(),
+                'X_tail_hash': hashlib.md5(str(X.tail().values).encode()).hexdigest(),
+                'y_head_hash': hashlib.md5(str(y.head().values).encode()).hexdigest(),
+                'y_tail_hash': hashlib.md5(str(y.tail().values).encode()).hexdigest()
+            }
+        },
+        
+        # Training configuration
+        'training_params': {
+            'window_size': window_size,
+            'window_type': window_type,
+            'random_seed': random_seed
+        },
+        
+        # Model configuration with full reproducibility
+        'model_config': {
+            'pipe_steps': pipe_steps,  # Store actual pipeline configuration
+            'param_grid': param_grid,
+            'pipeline_string': str(pipe_steps)  # Human-readable backup
+        },
+        
+        # Feature engineering and preprocessing
+        'preprocessing': {
+            'feature_engineering_steps': feature_engineering_steps or {},
+            'data_transformations': {
+                'log_returns_applied': True,  # Assumption based on framework
+                'timezone_normalization': True,
+                'missing_data_handling': 'dropna'
+            }
+        },
+        
+        # Simulation metadata
+        'simulation_info': {
+            'tag': tag,
+            'creation_timestamp': datetime.now().isoformat(),
+            'framework_version': '0.1.0',  # From package version
+            'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            'simulation_type': 'single_target'
+        }
+    }
+    
+    return metadata
+
+def generate_simulation_hash(X, y, window_size, window_type, pipe_steps, param_grid, tag,
+                           etf_symbols=None, target_etf=None, start_date=None, 
+                           random_seed=None, feature_engineering_steps=None):
+    """
+    Generate a unique hash for single-target simulation parameters to enable caching.
+    
+    This function now uses the enhanced metadata system while maintaining
+    backward compatibility for caching purposes.
+    """
+    # Generate full metadata
+    metadata = generate_simulation_metadata(
+        X, y, window_size, window_type, pipe_steps, param_grid, tag,
+        etf_symbols, target_etf, start_date, random_seed, feature_engineering_steps
+    )
+    
+    # Create hash from key parameters (excluding timestamps)
+    hash_components = [
+        str(metadata['data_source']['data_shapes']),
+        str(metadata['training_params']),
+        str(metadata['model_config']['pipeline_string']),
+        str(metadata['model_config']['param_grid']),
+        metadata['data_source']['data_fingerprint']['X_head_hash'],
+        metadata['data_source']['data_fingerprint']['X_tail_hash'],
+        metadata['data_source']['data_fingerprint']['y_head_hash'],
+        metadata['data_source']['data_fingerprint']['y_tail_hash']
+    ]
+    
+    hash_string = '_'.join(hash_components)
+    return hashlib.md5(hash_string.encode()).hexdigest(), metadata
+
+def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
+    """
+    Save single-target simulation results and metadata to disk for future reuse and full reconstruction.
+    
+    Args:
+        regout_df (pd.DataFrame): Simulation results
+        simulation_hash (str): Unique simulation identifier
+        tag (str): Human-readable simulation tag
+        metadata (dict, optional): Complete simulation metadata for reconstruction
+        
+    Returns:
+        str: Path to saved cache file
+    """
+    os.makedirs('cache', exist_ok=True)
+    cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
+    
+    # Package results with metadata
+    cache_data = {
+        'results': regout_df,
+        'metadata': metadata,
+        'cache_version': '2.0',  # Version for backward compatibility
+        'save_timestamp': datetime.now().isoformat()
+    }
+    
+    with open(cache_filename, 'wb') as f:
+        pickle.dump(cache_data, f)
+    
+    print(f"Saved single-target simulation results with metadata: {cache_filename}")
+    if metadata:
+        print(f"  - Target: {metadata['data_source']['target_etf']}")
+        print(f"  - Features: {len(metadata['data_source']['data_shapes']['feature_columns'])} columns")
+        print(f"  - Data period: {metadata['data_source']['start_date']} to {metadata['data_source']['end_date']}")
+    
+    return cache_filename
+
+def load_simulation_results(simulation_hash, tag):
+    """
+    Load cached single-target simulation results and metadata if they exist.
+    
+    Returns:
+        tuple: (results_df, metadata_dict) or (None, None) if not found
+    """
+    cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
+    
+    if os.path.exists(cache_filename):
+        print(f"Loading cached results: {cache_filename}")
+        with open(cache_filename, 'rb') as f:
+            cache_data = pickle.load(f)
+        
+        # Handle both old and new cache formats
+        if isinstance(cache_data, dict) and 'cache_version' in cache_data:
+            # New format with metadata
+            print(f"  - Loaded enhanced cache (version {cache_data['cache_version']})")
+            if cache_data.get('metadata'):
+                metadata = cache_data['metadata']
+                print(f"  - Original simulation: {metadata['simulation_info']['creation_timestamp']}")
+                print(f"  - Target: {metadata['data_source']['target_etf']}")
+            return cache_data['results'], cache_data.get('metadata')
+        else:
+            # Legacy format - just results
+            print("  - Loaded legacy cache (no metadata)")
+            return cache_data, None
+    
+    return None, None
 
 
 # --- Benchmarking Framework for Single-Target ---
@@ -201,7 +391,29 @@ class SingleTargetBenchmarkManager:
         return pd.DataFrame(benchmark_returns, index=dates)
 
 def calculate_information_ratio(strategy_returns: pd.Series, benchmark_returns: pd.Series) -> float:
-    """Calculate the Information Ratio between strategy and benchmark returns."""
+    """
+    Calculate the Information Ratio between strategy and benchmark returns.
+    
+    The Information Ratio measures risk-adjusted performance relative to a benchmark.
+    It's widely used in institutional portfolio management for performance evaluation.
+    
+    Educational Note:
+        Information Ratio = (Strategy Return - Benchmark Return) / Tracking Error
+        - Higher values indicate better risk-adjusted outperformance
+        - Values > 0.5 are considered good, > 1.0 are excellent
+        - It's the active return per unit of active risk
+    
+    Args:
+        strategy_returns (pd.Series): Strategy daily returns
+        benchmark_returns (pd.Series): Benchmark daily returns
+        
+    Returns:
+        float: Annualized Information Ratio
+        
+    Formula:
+        IR = (E[R_strategy - R_benchmark]) / σ(R_strategy - R_benchmark)
+        where E[] is expected value and σ is standard deviation
+    """
     try:
         # Align the series to ensure matching dates
         aligned_strategy, aligned_benchmark = strategy_returns.align(benchmark_returns, join='inner')
@@ -465,8 +677,38 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
 
 def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, param_grid={}, tag=None):
     """
-    Walk-forward simulation engine.
-    Trains a model on historical data and predicts the next period.
+    Walk-forward simulation engine for time-series backtesting.
+    
+    This function implements a rigorous walk-forward analysis methodology that prevents
+    look-ahead bias by training models only on historical data available at each 
+    prediction point. This is essential for realistic backtesting in quantitative finance.
+    
+    Educational Note:
+        Walk-forward analysis is the gold standard for time-series model validation.
+        It simulates how a model would perform in real-time trading by strictly
+        enforcing temporal ordering of training and prediction data.
+    
+    Args:
+        X (pd.DataFrame): Feature matrix with datetime index
+        y (pd.Series): Target variable (typically log returns) with datetime index  
+        window_size (int): Number of periods for training window (default: 400 ~ 1.5 years)
+        window_type (str): 'expanding' (growing window) or 'rolling' (fixed window)
+        pipe_steps (dict): sklearn Pipeline steps for preprocessing and modeling
+        param_grid (dict): Model hyperparameters
+        tag (str): Identifier for caching and logging purposes
+        
+    Returns:
+        tuple: (prediction_results_df, fitted_models_list)
+            - prediction_results_df: DataFrame with predictions and metadata
+            - fitted_models_list: List of trained model objects for analysis
+            
+    Example:
+        >>> results, models = Simulate(
+        ...     X=features, y=target_returns,
+        ...     window_size=500, window_type='expanding',
+        ...     pipe_steps=[('scaler', StandardScaler()), ('model', Ridge())],
+        ...     param_grid={'model__alpha': 1.0}
+        ... )
     """
     regout = pd.DataFrame(index=y.index)
     fit_list = []
@@ -509,8 +751,34 @@ def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, para
 
 def load_and_prepare_data(etf_list, target_etf, start_date=None):
     """
-    Downloads, processes, and prepares feature (X) and target (y) data.
-    The target `y` for a given day `t` is the return of the `target_etf` on day `t+1`.
+    Download and prepare ETF data for quantitative trading simulation.
+    
+    This function handles the complete data preparation pipeline for single-target
+    prediction models. It ensures proper temporal alignment between features and
+    targets to prevent look-ahead bias.
+    
+    Educational Note:
+        The target variable represents tomorrow's return using today's features,
+        simulating realistic prediction scenarios where you predict future returns
+        based on current market conditions.
+    
+    Args:
+        etf_list (list): List of ETF symbols for features (e.g., ['XLK', 'XLF', 'XLV'])
+        target_etf (str): ETF symbol to predict (e.g., 'SPY')
+        start_date (str, optional): Start date for data download (YYYY-MM-DD format)
+        
+    Returns:
+        tuple: (X_features, y_target, all_returns_df)
+            - X_features: Feature matrix (t-day features)
+            - y_target: Target returns (t+1 day target returns)
+            - all_returns_df: Complete log returns DataFrame for analysis
+            
+    Data Processing Steps:
+        1. Download adjusted closing prices from Yahoo Finance
+        2. Calculate log returns for all ETFs
+        3. Create feature matrix X using all ETF returns
+        4. Create target y using next-day target ETF returns
+        5. Align data temporally to prevent look-ahead bias
     """
     print(f"Downloading and preparing data from {start_date}...")
     all_etf_closing_prices_df = yf.download(etf_list, start=start_date, auto_adjust=True)['Close']

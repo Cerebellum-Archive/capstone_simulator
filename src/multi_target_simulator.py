@@ -29,6 +29,7 @@ How to Use:
 
 import os
 import warnings
+import sys
 from datetime import datetime
 import time
 import pytz
@@ -119,49 +120,209 @@ from utils_simulate import (
 
 # --- Caching and Performance Utilities ---
 
+def generate_simulation_metadata(X, y_multi, window_size, window_type, pipe_steps, param_grid, 
+                               tag, position_func, position_params, train_frequency,
+                               etf_symbols=None, target_etfs=None, start_date=None, 
+                               random_seed=None, feature_engineering_steps=None):
+    """
+    Generate comprehensive metadata for full simulation reconstruction.
+    
+    This enhanced version stores all information needed to perfectly reproduce
+    a simulation, enabling full reproducibility and audit trails.
+    
+    Educational Note:
+        Reproducibility is crucial in quantitative finance for:
+        1. Regulatory compliance and audit requirements
+        2. Model validation and backtesting verification  
+        3. Research collaboration and peer review
+        4. Production deployment confidence
+    
+    Args:
+        X (pd.DataFrame): Feature matrix
+        y_multi (pd.DataFrame): Multi-target variables  
+        window_size (int): Training window size
+        window_type (str): 'expanding' or 'rolling'
+        pipe_steps (list): sklearn Pipeline steps
+        param_grid (dict): Model hyperparameters
+        tag (str): Simulation identifier
+        position_func (callable): Position sizing function
+        position_params (list): Position sizing parameters
+        train_frequency (int): Retraining frequency
+        etf_symbols (list, optional): ETF symbols used as features
+        target_etfs (list, optional): ETF symbols used as targets
+        start_date (str, optional): Data start date
+        random_seed (int, optional): Random seed for reproducibility
+        feature_engineering_steps (dict, optional): Feature preprocessing metadata
+        
+    Returns:
+        dict: Complete simulation metadata for reconstruction
+    """
+    metadata = {
+        # Data source information for reconstruction
+        'data_source': {
+            'etf_symbols': etf_symbols,
+            'target_etfs': target_etfs,
+            'start_date': start_date,
+            'end_date': X.index[-1].strftime('%Y-%m-%d') if hasattr(X.index[-1], 'strftime') else str(X.index[-1]),
+            'data_shapes': {
+                'X_shape': X.shape, 
+                'y_multi_shape': y_multi.shape,
+                'feature_columns': list(X.columns),
+                'target_columns': list(y_multi.columns)
+            },
+            'data_fingerprint': {
+                'X_head_hash': hashlib.md5(str(X.head().values).encode()).hexdigest(),
+                'X_tail_hash': hashlib.md5(str(X.tail().values).encode()).hexdigest(),
+                'y_head_hash': hashlib.md5(str(y_multi.head().values).encode()).hexdigest(),
+                'y_tail_hash': hashlib.md5(str(y_multi.tail().values).encode()).hexdigest()
+            }
+        },
+        
+        # Training configuration
+        'training_params': {
+            'window_size': window_size,
+            'window_type': window_type,
+            'train_frequency': train_frequency,
+            'random_seed': random_seed
+        },
+        
+        # Model configuration with full reproducibility
+        'model_config': {
+            'pipe_steps': pipe_steps,  # Store actual pipeline configuration
+            'param_grid': param_grid,
+            'pipeline_string': str(pipe_steps)  # Human-readable backup
+        },
+        
+        # Position sizing strategy
+        'position_strategy': {
+            'function_name': position_func.__name__ if position_func else None,
+            'parameters': position_params,
+            'strategy_type': _determine_strategy_type(position_func) if position_func else None
+        },
+        
+        # Feature engineering and preprocessing
+        'preprocessing': {
+            'feature_engineering_steps': feature_engineering_steps or {},
+            'data_transformations': {
+                'log_returns_applied': True,  # Assumption based on framework
+                'timezone_normalization': True,
+                'missing_data_handling': 'dropna'
+            }
+        },
+        
+        # Simulation metadata
+        'simulation_info': {
+            'tag': tag,
+            'creation_timestamp': datetime.now().isoformat(),
+            'framework_version': '0.1.0',  # From package version
+            'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        }
+    }
+    
+    return metadata
+
 def generate_simulation_hash(X, y_multi, window_size, window_type, pipe_steps, param_grid, tag, 
-                           position_func, position_params, train_frequency):
+                           position_func, position_params, train_frequency,
+                           etf_symbols=None, target_etfs=None, start_date=None, 
+                           random_seed=None, feature_engineering_steps=None):
     """
     Generate a unique hash for simulation parameters to enable caching.
+    
+    This function now uses the enhanced metadata system while maintaining
+    backward compatibility for caching purposes.
     """
-    # Create a string representation of all parameters
-    param_str = f"{X.shape}_{y_multi.shape}_{window_size}_{window_type}_{tag}_{train_frequency}"
-    param_str += f"_{str(pipe_steps)}_{str(param_grid)}"
-    param_str += f"_{position_func.__name__ if position_func else 'None'}_{str(position_params)}"
+    # Generate full metadata
+    metadata = generate_simulation_metadata(
+        X, y_multi, window_size, window_type, pipe_steps, param_grid, tag,
+        position_func, position_params, train_frequency, etf_symbols, target_etfs,
+        start_date, random_seed, feature_engineering_steps
+    )
     
-    # Add data hash (sample of first/last rows to detect data changes)
-    data_sample = str(X.iloc[:5].values.tolist() + X.iloc[-5:].values.tolist())
-    data_sample += str(y_multi.iloc[:5].values.tolist() + y_multi.iloc[-5:].values.tolist())
-    param_str += data_sample
+    # Create hash from key parameters (excluding timestamps)
+    hash_components = [
+        str(metadata['data_source']['data_shapes']),
+        str(metadata['training_params']),
+        str(metadata['model_config']['pipeline_string']),
+        str(metadata['model_config']['param_grid']),
+        str(metadata['position_strategy']),
+        metadata['data_source']['data_fingerprint']['X_head_hash'],
+        metadata['data_source']['data_fingerprint']['X_tail_hash'],
+        metadata['data_source']['data_fingerprint']['y_head_hash'],
+        metadata['data_source']['data_fingerprint']['y_tail_hash']
+    ]
     
-    return hashlib.md5(param_str.encode()).hexdigest()
+    hash_string = '_'.join(hash_components)
+    return hashlib.md5(hash_string.encode()).hexdigest(), metadata
 
-def save_simulation_results(regout_df, simulation_hash, tag):
+def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
     """
-    Save simulation results to disk for future reuse.
+    Save simulation results and metadata to disk for future reuse and full reconstruction.
+    
+    Educational Note:
+        Saving comprehensive metadata enables complete reproducibility,
+        which is essential for regulatory compliance, peer review, and 
+        production deployment in quantitative finance.
+    
+    Args:
+        regout_df (pd.DataFrame): Simulation results
+        simulation_hash (str): Unique simulation identifier
+        tag (str): Human-readable simulation tag
+        metadata (dict, optional): Complete simulation metadata for reconstruction
+        
+    Returns:
+        str: Path to saved cache file
     """
     os.makedirs('cache', exist_ok=True)
     cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
     
-    with open(cache_filename, 'wb') as f:
-        pickle.dump(regout_df, f)
+    # Package results with metadata
+    cache_data = {
+        'results': regout_df,
+        'metadata': metadata,
+        'cache_version': '2.0',  # Version for backward compatibility
+        'save_timestamp': datetime.now().isoformat()
+    }
     
-    print(f"Saved simulation results: {cache_filename}")
+    with open(cache_filename, 'wb') as f:
+        pickle.dump(cache_data, f)
+    
+    print(f"Saved simulation results with metadata: {cache_filename}")
+    if metadata:
+        print(f"  - Simulation recreatable from: {metadata['data_source']['start_date']} to {metadata['data_source']['end_date']}")
+        print(f"  - Features: {len(metadata['data_source']['data_shapes']['feature_columns'])} columns")
+        print(f"  - Targets: {len(metadata['data_source']['data_shapes']['target_columns'])} columns")
+    
     return cache_filename
 
 def load_simulation_results(simulation_hash, tag):
     """
-    Load previously saved simulation results.
+    Load cached simulation results and metadata if they exist.
+    
+    Returns:
+        tuple: (results_df, metadata_dict) or (None, None) if not found
     """
     cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
     
     if os.path.exists(cache_filename):
+        print(f"Loading cached results: {cache_filename}")
         with open(cache_filename, 'rb') as f:
-            regout_df = pickle.load(f)
-        print(f"Loaded cached simulation results: {cache_filename}")
-        return regout_df
+            cache_data = pickle.load(f)
+        
+        # Handle both old and new cache formats
+        if isinstance(cache_data, dict) and 'cache_version' in cache_data:
+            # New format with metadata
+            print(f"  - Loaded enhanced cache (version {cache_data['cache_version']})")
+            if cache_data.get('metadata'):
+                metadata = cache_data['metadata']
+                print(f"  - Original simulation: {metadata['simulation_info']['creation_timestamp']}")
+                print(f"  - Data period: {metadata['data_source']['start_date']} to {metadata['data_source']['end_date']}")
+            return cache_data['results'], cache_data.get('metadata')
+        else:
+            # Legacy format - just results
+            print("  - Loaded legacy cache (no metadata)")
+            return cache_data, None
     
-    return None
+    return None, None
 
 def generate_train_predict_calendar_with_frequency(X, train_frequency, window_type, window_size):
     """
@@ -612,14 +773,35 @@ def calculate_individual_position_weights(predictions_row, position_func, positi
 
 def L_func_multi_target_equal_weight(predictions_df, params=[]):
     """
-    Equal-weight position sizing across all predicted targets.
+    Equal-weight position sizing strategy for multi-asset portfolios.
+    
+    This strategy implements a democratic approach to portfolio construction where
+    each asset gets equal influence regardless of prediction confidence or volatility.
+    It's the simplest multi-target strategy and serves as a baseline for comparison.
+    
+    Educational Note:
+        Equal weighting is often used as a benchmark in portfolio management because:
+        1. It avoids concentration risk from any single asset
+        2. It's transparent and easy to explain to stakeholders  
+        3. It often outperforms cap-weighted benchmarks due to rebalancing effects
+        4. It requires minimal complexity in implementation
     
     Args:
-        predictions_df: DataFrame with predictions for each target
-        params: [base_leverage] - base leverage to apply
+        predictions_df (pd.DataFrame): Predictions for each target asset (rows=dates, cols=assets)
+        params (list): [base_leverage] - base leverage multiplier (default: 1.0)
     
     Returns:
-        Series with portfolio leverage for each date
+        pd.Series: Portfolio leverage for each date
+        
+    Strategy Logic:
+        1. Average predictions across all target assets
+        2. Take long position if average > 0, short if average < 0
+        3. Apply base leverage uniformly across all positions
+        
+    Example:
+        >>> predictions = pd.DataFrame({'SPY': [0.01, -0.02], 'QQQ': [0.03, 0.01]})
+        >>> leverage = L_func_multi_target_equal_weight(predictions, params=[1.5])
+        >>> # Result: [1.5, -1.5] based on average predictions [0.02, -0.005]
     """
     base_leverage = params[0] if params else 1.0
     n_targets = len(predictions_df.columns)
