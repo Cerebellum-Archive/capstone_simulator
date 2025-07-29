@@ -31,9 +31,12 @@ from .utils_simulate import (
     EWMTransformer,
     create_results_xarray,
     calculate_performance_metrics,
-    generate_train_predict_calendar,
+    generate_train_predict_calender,
     p_by_year,
     feature_profiles,
+    get_complexity_score,
+    calculate_complexity_adjusted_metrics,
+    unwrap_estimator,
 )
 
 __all__ = [
@@ -44,7 +47,10 @@ __all__ = [
     "EWMTransformer",
     "create_results_xarray",
     "calculate_performance_metrics",
-    "generate_train_predict_calendar",
+    "generate_train_predict_calender",
     "p_by_year",
     "feature_profiles",
+    "get_complexity_score",
+    "calculate_complexity_adjusted_metrics",
+    "unwrap_estimator",
 ]

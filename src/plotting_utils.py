@@ -3,7 +3,6 @@ Professional plotting utilities for financial strategy tear sheets.
 Clean, modular approach to creating publication-quality visualizations.
 """
 
-import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,7 +21,19 @@ def format_benchmark_name(benchmark_col: str) -> str:
     name = benchmark_col.replace('benchmark_', '').replace('_', ' ').title()
     # Apply abbreviations
     if name == 'Equal Weight Targets':
-        return 'EQ Weight'
+        return 'EQ WT Targets'
+    elif name == 'Equal Weight All':
+        return 'EQ WT All'
+    elif name == 'Spy Only':
+        return 'SPY Only'
+    elif name == 'Vti Market':
+        return 'VTI Market'
+    elif name == 'Random Long Short':
+        return 'Rand L/S'
+    elif name == 'Risk Parity':
+        return 'Risk Parity'
+    elif name == 'Zero Return':
+        return 'Zero Ret'
     return name
 
 @dataclass
@@ -45,18 +56,168 @@ sns.set_palette("husl")
 plt.rcParams['font.size'] = 10
 plt.rcParams['axes.linewidth'] = 1.5
 
+
+def _get_strategy_pipeline_data(sweep_tags):
+    """Generate strategy pipeline overview data with parameters in correct columns."""
+    from sklearn.linear_model import LinearRegression, HuberRegressor, ElasticNet
+    from sklearn.ensemble import RandomForestRegressor
+    
+    # Fix the relative import issue
+    try:
+        from utils_simulate import get_complexity_score
+    except ImportError:
+        # Fallback if utils_simulate is not available
+        def get_complexity_score(_):
+            """Fallback complexity score function."""
+            return 1.0  # Default complexity score
+    
+    pipeline_data = []
+    
+    # Master strategy configuration mapping with parameters in correct columns
+    strategy_configs = {
+        # Multi-target strategies
+        'mt_linear_std_equalweight': {
+            'strategy': 'Linear-EqualWeight',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'LinearRegression()',
+            'portfolio': 'Equal allocation\nbase_leverage=1.0',
+            'estimator': LinearRegression(),
+            'portfolio_multiplier': 1.0
+        },
+        'mt_linear_std_confidenceweighted': {
+            'strategy': 'Linear-ConfWeighted', 
+            'preprocessing': 'StandardScaler()',
+            'learner': 'LinearRegression()',
+            'portfolio': 'Confidence weighting\nmax_leverage=2.0',
+            'estimator': LinearRegression(),
+            'portfolio_multiplier': 1.2
+        },
+        'mt_linear_std_longshort': {
+            'strategy': 'Linear-LongShort',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'LinearRegression()',
+            'portfolio': 'Long/Short/terciles\nbase_leverage=1.0',
+            'estimator': LinearRegression(),
+            'portfolio_multiplier': 1.5
+        },
+        'mt_huber_std_equalweight': {
+            'strategy': 'Huber-EqualWeight',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'HuberRegressor\n(ε=1.35)',
+            'portfolio': 'Equal allocation\nbase_leverage=1.0',
+            'estimator': HuberRegressor(epsilon=1.35),
+            'portfolio_multiplier': 1.0
+        },
+        'mt_huber_std_confidenceweighted': {
+            'strategy': 'Huber-ConfWeighted',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'HuberRegressor\n(ε=1.35)',
+            'portfolio': 'Confidence weighting\nmax_leverage=2.0',
+            'estimator': HuberRegressor(epsilon=1.35),
+            'portfolio_multiplier': 1.2
+        },
+        'mt_huber_std_longshort': {
+            'strategy': 'Huber-LongShort',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'HuberRegressor\n(ε=1.35)',
+            'portfolio': 'Long/Short/terciles\nbase_leverage=1.0',
+            'estimator': HuberRegressor(epsilon=1.35),
+            'portfolio_multiplier': 1.5
+        },
+        'mt_elasticnet_std_equalweight': {
+            'strategy': 'ElasticNet-EqualWeight',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'ElasticNet\n(α=0.01, l1=0.5)',
+            'portfolio': 'Equal allocation\nbase_leverage=1.0',
+            'estimator': ElasticNet(alpha=0.01, l1_ratio=0.5),
+            'portfolio_multiplier': 1.0
+        },
+        'mt_elasticnet_std_confidenceweighted': {
+            'strategy': 'ElasticNet-ConfWeighted',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'ElasticNet\n(α=0.01, l1=0.5)',
+            'portfolio': 'Confidence weighting\nmax_leverage=2.0',
+            'estimator': ElasticNet(alpha=0.01, l1_ratio=0.5),
+            'portfolio_multiplier': 1.2
+        },
+        'mt_elasticnet_std_longshort': {
+            'strategy': 'ElasticNet-LongShort',
+            'preprocessing': 'StandardScaler()',
+            'learner': 'ElasticNet\n(α=0.01, l1=0.5)',
+            'portfolio': 'Long/Short/terciles\nbase_leverage=1.0',
+            'estimator': ElasticNet(alpha=0.01, l1_ratio=0.5),
+            'portfolio_multiplier': 1.5
+        },
+        # Single-target strategies
+        'st_rf_ewm_binary': {
+            'strategy': 'RF-Binary',
+            'preprocessing': 'EWMTransformer\n(halflife=4)',
+            'learner': 'RandomForest\n(n_est=50)',
+            'portfolio': 'Binary long/short\nbinary_threshold=0.0',
+            'estimator': RandomForestRegressor(n_estimators=50),
+            'portfolio_multiplier': 1.3
+        },
+        'st_rf_ewm_quartile': {
+            'strategy': 'RF-Quartile',
+            'preprocessing': 'EWMTransformer\n(halflife=4)',
+            'learner': 'RandomForest\n(n_est=50)',
+            'portfolio': 'Quartile sizing\nquartile_bins=4',
+            'estimator': RandomForestRegressor(n_estimators=50),
+            'portfolio_multiplier': 1.4
+        },
+        'st_rf_ewm_proportional': {
+            'strategy': 'RF-Proportional',
+            'preprocessing': 'EWMTransformer\n(halflife=4)',
+            'learner': 'RandomForest\n(n_est=50)',
+            'portfolio': 'Proportional sizing\nmax_position=2.0',
+            'estimator': RandomForestRegressor(n_estimators=50),
+            'portfolio_multiplier': 1.6
+        }
+    }
+    
+    # Match sweep_tags to strategy configurations - ONE row per strategy
+    for tag in sweep_tags:
+        tag_lower = tag.lower()
+        config_found = False
+        
+        for config_key, config_data in strategy_configs.items():
+            if config_key in tag_lower:
+                # Calculate actual complexity score
+                base_complexity = get_complexity_score(config_data['estimator'])
+                total_complexity = base_complexity * config_data['portfolio_multiplier']
+                
+                # Single row with all parameters in correct columns
+                pipeline_data.append({
+                    'Strategy': config_data['strategy'],
+                    'Preprocessing': config_data['preprocessing'],
+                    'Learner': config_data['learner'],
+                    'Portfolio': config_data['portfolio'],
+                    'Complexity': f'{total_complexity:.2f}'
+                })
+                config_found = True
+                break
+        
+        # Fallback for unmatched strategies
+        if not config_found:
+            pipeline_data.append({
+                'Strategy': tag[:15] + '...' if len(tag) > 15 else tag,
+                'Preprocessing': 'Unknown',
+                'Learner': 'Unknown',
+                'Portfolio': 'Unknown',
+                'Complexity': '?.??'
+            })
+    
+    return pipeline_data
+
 def create_tear_sheet(regout_list, sweep_tags, config):
     """
-    Create a professional, publication-quality tear sheet.
-    
-    Args:
-        regout_list: List of DataFrames with simulation results
-        sweep_tags: List of strategy tags
-        config: Configuration dictionary with run_timestamp
-    
-    Returns:
-        str: Path to saved PDF file
+    Create a professional, publication-quality tear sheet with FIXED formatting issues.
     """
+    print("🎨 create_tear_sheet function called")
+    print(f"📊 Number of regout items: {len(regout_list)}")
+    print(f"🏷️  Number of tags: {len(sweep_tags)}")
+    print(f"⚙️  Config keys: {list(config.keys())}")
+    
     # Prepare data
     cumulative_returns_data = []
     performance_data = []
@@ -153,14 +314,14 @@ def create_tear_sheet(regout_list, sweep_tags, config):
         return None
     
     # Create figure with professional layout
-    fig = plt.figure(figsize=(11, 14))
+    fig = plt.figure(figsize=(12, 20))  # Increased height for more parameter rows
     
     # Define color palette
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
               '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
     
-    # Create GridSpec for precise layout control with minimal spacing
-    gs = GridSpec(4, 1, figure=fig, height_ratios=[0.4, 2.8, 0.3, 1.8], hspace=0.3)
+    # Create GridSpec with more space for tables
+    gs = GridSpec(5, 1, figure=fig, height_ratios=[0.4, 2.2, 0.3, 1.4, 2.2], hspace=0.4)  # Increased pipeline section
     
     # 1. Header Section
     ax_header = fig.add_subplot(gs[0])
@@ -241,7 +402,7 @@ def create_tear_sheet(regout_list, sweep_tags, config):
     ax_legend.legend(handles=legend_elements, loc='upper center', ncol=3, 
                      fontsize=10, frameon=False, columnspacing=2.0)
     
-    # 4. Performance Table Section
+    # 4. Performance Table Section - FIXED WITH TEXT WRAPPING
     ax_table = fig.add_subplot(gs[3])
     ax_table.axis('off')
     
@@ -251,93 +412,53 @@ def create_tear_sheet(regout_list, sweep_tags, config):
     # Convert percentage strings to numeric for sorting
     df['Excess_Return_Numeric'] = df['Excess Return (%)'].str.rstrip('%').astype(float)
     df_sorted = df.sort_values('Excess_Return_Numeric', ascending=False)
-    df_sorted = df_sorted.drop('Excess_Return_Numeric', axis=1)  # Remove helper column
+    df_sorted = df_sorted.drop('Excess_Return_Numeric', axis=1)
     
-    # Add table title with better spacing
+    # Add table title
     ax_table.text(0.5, 0.98, 'PERFORMANCE SUMMARY', fontsize=14, fontweight='bold',
                  ha='center', va='top', transform=ax_table.transAxes, color='#2c3e50')
     
-    # Create table with professional styling and proper column widths
+    # Create table with FIXED column widths
     table = ax_table.table(cellText=df_sorted.values,
                           colLabels=df_sorted.columns,
                           cellLoc='center',
                           loc='center',
-                          bbox=[0.05, 0.08, 0.9, 0.8])
+                          bbox=[0.01, 0.05, 0.98, 0.85])  # Full width bbox
     
-    # PDF-safe column widths with extra padding to prevent overlap
-    def calculate_pdf_safe_widths(df, headers):
-        """Calculate column widths optimized for PDF rendering with padding."""
-        col_widths = []
-        
-        # Calculate character width for each column with extra safety margin
-        char_widths = []
-        for i, col in enumerate(df.columns):
-            if i < len(headers):
-                header_len = len(headers[i].replace('\n', ' '))
-                content_len = df[col].astype(str).str.len().max() if len(df) > 0 else 0
-                max_len = max(header_len, content_len)
-                # Add 20% padding for PDF safety
-                padded_len = int(max_len * 1.2)
-                char_widths.append(padded_len)
-        
-        total_chars = sum(char_widths)
-        available_width = 0.85  # Reduced from 0.9 for more margin
-        
-        # Calculate proportional widths
-        for char_width in char_widths:
-            proportional_width = (char_width / total_chars) * available_width
-            # Apply stricter constraints for PDF stability
-            constrained_width = max(0.10, min(0.30, proportional_width))
-            col_widths.append(constrained_width)
-        
-        # Ensure total doesn't exceed available space
-        total_width = sum(col_widths)
-        if total_width > available_width:
-            col_widths = [w * (available_width / total_width) for w in col_widths]
-        
-        # Debug output
-        print("PDF-safe column widths:")
-        for i, (header, width) in enumerate(zip(headers, col_widths)):
-            print(f"  Col {i}: {header.replace(chr(10), ' ')} -> {width:.3f}")
-        print(f"  Total width: {sum(col_widths):.3f}")
-            
-        return col_widths
-    
-    # Calculate PDF-safe widths using header texts with line breaks
-    header_texts_for_width = ['Strategy', 'Annual\nReturn (%)', 'Sharpe\nRatio', 'Max\nDrawdown (%)', 'Best\nBench', 'Excess\nReturn (%)', 'Info\nRatio']
-    col_widths = calculate_pdf_safe_widths(df_sorted, header_texts_for_width)
+    # FIXED: Use specific column widths that work well with text wrapping
+    col_widths = [0.28, 0.12, 0.12, 0.12, 0.18, 0.12, 0.08]  # Strategy gets more space
     
     for i, width in enumerate(col_widths):
-        if i < len(df_sorted.columns):  # Prevent index errors
-            for j in range(len(df_sorted) + 1):  # +1 for header row
+        if i < len(df_sorted.columns):
+            for j in range(len(df_sorted) + 1):
                 table[(j, i)].set_width(width)
-                # Set alignment: Strategy column left-aligned, others right-aligned
+                # Set alignment
                 if i == 0:  # Strategy column
                     table[(j, i)]._text.set_horizontalalignment('left')
                 else:  # Data columns
                     table[(j, i)]._text.set_horizontalalignment('right')
     
-    # Style the table with PDF-optimized settings
+    # Style the table
     table.auto_set_font_size(False)
-    table.set_fontsize(9)  # Slightly smaller font for better fit
-    table.scale(1.0, 2.0)  # Reduced horizontal scaling to prevent overlap
+    table.set_fontsize(9)  # Slightly smaller to fit more content
+    table.scale(1.0, 2.5)  # More height for better readability
     
-    # Add explicit cell padding for PDF stability
-    for key, cell in table.get_celld().items():
-        cell.set_text_props(wrap=False)  # Prevent text wrapping
-        cell.PAD = 0.02  # Add small padding
+    # FIXED: Enable text wrapping for better column fit
+    for _, cell in table.get_celld().items():
+        cell.set_text_props(wrap=True)  # Enable text wrapping
+        cell.PAD = 0.04  # More padding
     
-    # Add text wrapping for column headers (updated for 7 columns)
+    # FIXED: Use shorter header texts with line breaks for better fit
     header_texts = ['Strategy', 'Annual\nReturn (%)', 'Sharpe\nRatio', 'Max\nDrawdown (%)', 'Best\nBench', 'Excess\nReturn (%)', 'Info\nRatio']
     for i, header_text in enumerate(header_texts):
-        if i < len(df_sorted.columns):  # Prevent index errors
+        if i < len(df_sorted.columns):
             table[(0, i)]._text.set_text(header_text)
     
-    # Color the header row and increase its height
+    # Style header row
     for i in range(len(df_sorted.columns)):
         table[(0, i)].set_facecolor('#34495e')
-        table[(0, i)].set_text_props(weight='bold', color='white')
-        table[(0, i)].set_height(0.18)  # Increase header row height significantly
+        table[(0, i)].set_text_props(weight='bold', color='white', fontsize=10)
+        table[(0, i)].set_height(0.22)  # Taller header
     
     # Color alternating rows
     for i in range(1, len(df_sorted) + 1):
@@ -345,17 +466,147 @@ def create_tear_sheet(regout_list, sweep_tags, config):
             if i % 2 == 0:
                 table[(i, j)].set_facecolor('#ecf0f1')
     
-    # Save the tear sheet
-    os.makedirs('reports', exist_ok=True)
-    pdf_filename = f'reports/sim_tear_sheet_{config["run_timestamp"]}.pdf'
-    png_filename = f'reports/sim_tear_sheet_{config["run_timestamp"]}.png'
+    # 5. Strategy Pipeline Overview Section - SIMPLIFIED TO ONE ROW PER STRATEGY
+    ax_pipeline = fig.add_subplot(gs[4])
+    ax_pipeline.axis('off')
     
-    plt.savefig(pdf_filename, dpi=300, bbox_inches='tight', format='pdf')
-    plt.savefig(png_filename, dpi=300, bbox_inches='tight', format='png')
+    # Add pipeline overview title
+    ax_pipeline.text(0.5, 0.98, 'STRATEGY PIPELINE OVERVIEW', fontsize=14, fontweight='bold',
+                    ha='center', va='top', transform=ax_pipeline.transAxes, color='#2c3e50')
     
-    print(f"📊 Professional tear sheet saved:")
-    print(f"   📄 PDF: {pdf_filename}")
-    print(f"   🖼️  PNG: {png_filename}")
+    # Add complexity scale explanation
+    complexity_text = 'Complexity Scale: Real values based on model parameters and portfolio strategy (higher = more complex)'
+    ax_pipeline.text(0.5, 0.92, complexity_text, 
+                    fontsize=9, ha='center', va='top', transform=ax_pipeline.transAxes, 
+                    color='#7f8c8d', style='italic')
+    
+    # Create strategy pipeline data
+    pipeline_data = _get_strategy_pipeline_data(sweep_tags)
+    
+    if pipeline_data:
+        # Create DataFrame from pipeline data
+        pipeline_df = pd.DataFrame(pipeline_data)
+        
+        # Create pipeline table with FIXED positioning
+        pipeline_table = ax_pipeline.table(cellText=pipeline_df.values,
+                                         colLabels=pipeline_df.columns,
+                                         cellLoc='left',
+                                         loc='center',
+                                         bbox=[0.01, 0.02, 0.98, 0.85])  # Full width
+        
+        # FIXED: Style with better text handling
+        pipeline_table.auto_set_font_size(False)
+        pipeline_table.set_fontsize(8)  # Larger font since fewer rows
+        pipeline_table.scale(1.0, 2.5)  # More height for better readability
+        
+        # FIXED: Use specific column widths with WIDER complexity column
+        col_widths = [0.22, 0.15, 0.15, 0.28, 0.20]  # Strategy, Preprocessing, Learner, Portfolio, Complexity (wider)
+        for i, width in enumerate(col_widths):
+            for j in range(len(pipeline_df) + 1):
+                if i < len(pipeline_df.columns):
+                    pipeline_table[(j, i)].set_width(width)
+        
+        # Style header row
+        for i in range(len(pipeline_df.columns)):
+            pipeline_table[(0, i)].set_facecolor('#34495e')
+            pipeline_table[(0, i)].set_text_props(weight='bold', color='white', fontsize=9)
+            pipeline_table[(0, i)].set_height(0.20)
+        
+        # FIXED: Enable text wrapping with better settings
+        for _, cell in pipeline_table.get_celld().items():
+            cell.set_text_props(wrap=True)  # Enable text wrapping
+            cell.PAD = 0.05  # More padding for better readability
+        
+        # Style alternating rows (now every other row since one row per strategy)
+        for i in range(1, len(pipeline_df) + 1):
+            for j in range(len(pipeline_df.columns)):
+                # Simple alternating pattern
+                if i % 2 == 0:
+                    pipeline_table[(i, j)].set_facecolor('#ecf0f1')
+                
+                # Set alignment
+                if j == 0:  # Strategy column
+                    pipeline_table[(i, j)]._text.set_horizontalalignment('left')
+                elif j in [1, 2, 3]:  # Preprocessing, Learner, Portfolio columns
+                    pipeline_table[(i, j)]._text.set_horizontalalignment('left')
+                else:  # Complexity column
+                    pipeline_table[(i, j)]._text.set_horizontalalignment('center')
+                
+                # All rows get same styling since they're all main strategy rows
+                pipeline_table[(i, j)].set_text_props(fontsize=8, weight='normal', wrap=True)
+    
+    # Save the tear sheet - SIMPLE AND RELIABLE APPROACH
+    import os
+    
+    print("💾 Starting file save process...")
+    
+    try:
+        # Simple approach: use current working directory and create reports subdirectory
+        current_dir = os.getcwd()
+        reports_dir = os.path.join(current_dir, 'reports')
+        
+        print(f"📁 Current directory: {current_dir}")
+        print(f"📁 Reports directory: {reports_dir}")
+        print(f"📁 Reports directory exists: {os.path.exists(reports_dir)}")
+        
+        # Create reports directory if it doesn't exist
+        os.makedirs(reports_dir, exist_ok=True)
+        print(f"📁 Reports directory created/exists: {os.path.exists(reports_dir)}")
+        
+        # Use simple relative paths
+        pdf_filename = os.path.join(reports_dir, f'sim_tear_sheet_{config["run_timestamp"]}.pdf')
+        png_filename = os.path.join(reports_dir, f'sim_tear_sheet_{config["run_timestamp"]}.png')
+        
+        print(f"📄 PDF filename: {pdf_filename}")
+        print(f"🖼️  PNG filename: {png_filename}")
+        print(f"📄 PDF absolute path: {os.path.abspath(pdf_filename)}")
+        print(f"🖼️  PNG absolute path: {os.path.abspath(png_filename)}")
+        
+        # Add debugging to see what's happening
+        print(f"Current working directory: {current_dir}")
+        print(f"Reports directory: {reports_dir}")
+        print(f"Reports directory exists: {os.path.exists(reports_dir)}")
+        print(f"Saving PDF to: {os.path.abspath(pdf_filename)}")
+        print(f"Saving PNG to: {os.path.abspath(png_filename)}")
+        
+        print("💾 Saving PDF file...")
+        # Save the files
+        plt.savefig(pdf_filename, dpi=300, bbox_inches='tight', format='pdf')
+        print("✅ PDF saved successfully")
+        
+        print("💾 Saving PNG file...")
+        plt.savefig(png_filename, dpi=300, bbox_inches='tight', format='png')
+        print("✅ PNG saved successfully")
+        
+        # Verify files were created
+        if os.path.exists(pdf_filename):
+            print(f"✅ PDF file created successfully: {pdf_filename}")
+            print(f"📊 PDF file size: {os.path.getsize(pdf_filename)} bytes")
+        else:
+            print(f"❌ PDF file was not created: {pdf_filename}")
+            
+        if os.path.exists(png_filename):
+            print(f"✅ PNG file created successfully: {png_filename}")
+            print(f"📊 PNG file size: {os.path.getsize(png_filename)} bytes")
+        else:
+            print(f"❌ PNG file was not created: {png_filename}")
+        
+        print(f"📊 Professional tear sheet saved:")
+        print(f"   PDF: {pdf_filename}")
+        print(f"   🖼️  PNG: {png_filename}")
+        
+    except Exception as e:
+        print(f"❌ Error saving tear sheet: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback: save to current directory
+        pdf_filename = f'sim_tear_sheet_{config["run_timestamp"]}.pdf'
+        png_filename = f'sim_tear_sheet_{config["run_timestamp"]}.png'
+        plt.savefig(pdf_filename, dpi=300, bbox_inches='tight', format='pdf')
+        plt.savefig(png_filename, dpi=300, bbox_inches='tight', format='png')
+        print(f"📊 Fallback: Files saved to current directory")
+        print(f"   PDF: {pdf_filename}")
+        print(f"   PNG: {png_filename}")
     
     plt.close()
     
@@ -456,9 +707,13 @@ def plot_strategy_vs_benchmarks(regout_df: pd.DataFrame, strategy_name: str, con
     
     plt.tight_layout()
     
-    # Save plot
-    os.makedirs('reports', exist_ok=True)
-    filename = f'reports/{strategy_name}_vs_benchmarks_{config.get("run_timestamp", "unknown")}.png'
+    # Save plot - SIMPLE APPROACH
+    import os
+    current_dir = os.getcwd()
+    reports_dir = os.path.join(current_dir, 'reports')
+    
+    os.makedirs(reports_dir, exist_ok=True)
+    filename = os.path.join(reports_dir, f'{strategy_name}_vs_benchmarks_{config.get("run_timestamp", "unknown")}.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -542,18 +797,20 @@ def create_benchmark_comparison_heatmap(regout_list, sweep_tags, config) -> str:
     
     plt.tight_layout()
     
-    # Save plot
-    os.makedirs('reports', exist_ok=True)
-    filename = f'reports/benchmark_comparison_heatmap_{config.get("run_timestamp", "unknown")}.png'
+    # Save - SIMPLE APPROACH
+    import os
+    current_dir = os.getcwd()
+    reports_dir = os.path.join(current_dir, 'reports')
+    
+    os.makedirs(reports_dir, exist_ok=True)
+    filename = os.path.join(reports_dir, f'benchmark_comparison_heatmap_{config.get("run_timestamp", "unknown")}.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
     return filename
 
 def create_simple_comparison_plot(regout_list, sweep_tags, config):
-    """
-    Create a simple, clean comparison plot without complex layout.
-    """
+    """Create a simple comparison plot of all strategies."""
     # Prepare data
     cumulative_returns_data = []
     
@@ -586,10 +843,14 @@ def create_simple_comparison_plot(regout_list, sweep_tags, config):
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(True, alpha=0.3)
     
-    # Save
-    os.makedirs('reports', exist_ok=True)
-    filename = f'reports/simple_comparison_{config["run_timestamp"]}.png'
+    # Save - SIMPLE APPROACH
+    import os
+    current_dir = os.getcwd()
+    reports_dir = os.path.join(current_dir, 'reports')
+    
+    os.makedirs(reports_dir, exist_ok=True)
+    filename = os.path.join(reports_dir, f'simple_comparison_{config.get("run_timestamp", "unknown")}.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
     
-    return filename 
+    return filename

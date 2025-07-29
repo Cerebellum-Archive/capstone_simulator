@@ -73,13 +73,31 @@ def format_benchmark_name(benchmark_col: str) -> str:
     return name
 
 # Utility functions from our custom library
-from utils_simulate import (
-    simplify_teos, log_returns, generate_train_predict_calender,
-    StatsModelsWrapper_with_OLS
-)
+try:
+    from .utils_simulate import (
+        simplify_teos, log_returns, generate_train_predict_calender,
+        StatsModelsWrapper_with_OLS, get_complexity_score, 
+        calculate_complexity_adjusted_metrics
+    )
+except ImportError:
+    # Fallback for direct execution or testing
+    from utils_simulate import (
+        simplify_teos, log_returns, generate_train_predict_calender,
+        StatsModelsWrapper_with_OLS, get_complexity_score, 
+        calculate_complexity_adjusted_metrics
+    )
 
 # Professional plotting utilities
-from plotting_utils import create_tear_sheet, create_simple_comparison_plot
+try:
+    from .plotting_utils import create_tear_sheet, create_simple_comparison_plot
+except ImportError:
+    # Fallback if plotting_utils is not available
+    def create_tear_sheet(*args, **kwargs):
+        print("Warning: Plotting utilities not available")
+        return None
+    def create_simple_comparison_plot(*args, **kwargs):
+        print("Warning: Plotting utilities not available")
+        return None
 
 
 # --- Enhanced Metadata and Caching System ---
@@ -537,7 +555,7 @@ def L_func_4(ds, params=[]):
 # --- Core Simulation Functions ---
 
 def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, target_etf='SPY', 
-                           feature_etfs=None, benchmark_manager=None, config=None):
+                           feature_etfs=None, benchmark_manager=None, config=None, metadata_list=None):
     """
     Enhanced simulation statistics with benchmarking for single-target strategies.
     Calculates and prints comprehensive simulation statistics including benchmark comparisons.
@@ -586,6 +604,85 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                 np.sum(np.isfinite(reg_out['prediction']) & (reg_out['prediction'] > 0)) /
                 np.sum(np.isfinite(reg_out['prediction'])) if np.sum(np.isfinite(reg_out['prediction'])) > 0 else np.nan
             )
+            
+            # Model complexity analysis from metadata/hash
+            if metadata_list and n < len(metadata_list) and metadata_list[n]:
+                try:
+                    metadata = metadata_list[n]
+                    
+                    # Extract model configuration from metadata
+                    if 'model_config' in metadata and 'pipe_steps' in metadata['model_config']:
+                        pipe_steps = metadata['model_config']['pipe_steps']
+                        param_grid = metadata['model_config'].get('param_grid', {})
+                        
+                        # Reconstruct the model from metadata to calculate complexity
+                        from sklearn.pipeline import Pipeline
+                        from sklearn.preprocessing import StandardScaler
+                        
+                        # Create a mock estimator from the pipeline configuration
+                        try:
+                            # Find the final estimator in the pipeline
+                            final_estimator = None
+                            for step_name, step_obj in pipe_steps:
+                                if hasattr(step_obj, 'predict'):  # This is likely the final estimator
+                                    final_estimator = step_obj
+                            
+                            if final_estimator is not None:
+                                # Apply any parameters from param_grid
+                                if param_grid:
+                                    final_estimator.set_params(**param_grid)
+                                
+                                complexity_score = get_complexity_score(final_estimator)
+                                df.loc['complexity_score', testlabel] = complexity_score
+                                
+                                # Calculate complexity-adjusted metrics
+                                if not reg_out.perf_ret.empty:
+                                    complexity_metrics = calculate_complexity_adjusted_metrics(reg_out.perf_ret, complexity_score)
+                                    df.loc['complexity_adj_return', testlabel] = complexity_metrics['complexity_adjusted_return']
+                                    df.loc['complexity_adj_sharpe', testlabel] = complexity_metrics['complexity_adjusted_sharpe']
+                                    df.loc['complexity_efficiency', testlabel] = complexity_metrics['complexity_efficiency']
+                                    df.loc['overfitting_penalty', testlabel] = complexity_metrics['overfitting_penalty']
+                                else:
+                                    df.loc['complexity_adj_return', testlabel] = np.nan
+                                    df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                                    df.loc['complexity_efficiency', testlabel] = np.nan
+                                    df.loc['overfitting_penalty', testlabel] = np.nan
+                            else:
+                                # Default complexity score if no final estimator found
+                                df.loc['complexity_score', testlabel] = 2.0  # Default for unknown
+                                df.loc['complexity_adj_return', testlabel] = np.nan
+                                df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                                df.loc['complexity_efficiency', testlabel] = np.nan
+                                df.loc['overfitting_penalty', testlabel] = np.nan
+                                
+                        except Exception as inner_e:
+                            logger.warning(f"Could not reconstruct model from metadata for {testlabel}: {inner_e}")
+                            df.loc['complexity_score', testlabel] = 2.0  # Default for unknown
+                            df.loc['complexity_adj_return', testlabel] = np.nan
+                            df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                            df.loc['complexity_efficiency', testlabel] = np.nan
+                            df.loc['overfitting_penalty', testlabel] = np.nan
+                    else:
+                        # No model config in metadata
+                        df.loc['complexity_score', testlabel] = np.nan
+                        df.loc['complexity_adj_return', testlabel] = np.nan
+                        df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                        df.loc['complexity_efficiency', testlabel] = np.nan
+                        df.loc['overfitting_penalty', testlabel] = np.nan
+                        
+                except Exception as e:
+                    logger.warning(f"Could not calculate complexity score from metadata for {testlabel}: {e}")
+                    df.loc['complexity_score', testlabel] = np.nan
+                    df.loc['complexity_adj_return', testlabel] = np.nan
+                    df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                    df.loc['complexity_efficiency', testlabel] = np.nan
+                    df.loc['overfitting_penalty', testlabel] = np.nan
+            else:
+                df.loc['complexity_score', testlabel] = np.nan
+                df.loc['complexity_adj_return', testlabel] = np.nan
+                df.loc['complexity_adj_sharpe', testlabel] = np.nan
+                df.loc['complexity_efficiency', testlabel] = np.nan
+                df.loc['overfitting_penalty', testlabel] = np.nan
             df.loc['rmse', testlabel] = np.sqrt(rmse(reg_out.prediction, reg_out.actual))
             df.loc['mae', testlabel] = mae(reg_out.prediction, reg_out.actual)
             df.loc['r2', testlabel] = r2_score(reg_out.actual, reg_out.prediction)
@@ -660,9 +757,9 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                     df.loc['best_info_ratio', testlabel] = np.nan
                     df.loc['best_excess_return', testlabel] = np.nan
 
-            df.loc['start_date', testlabel] = min(reg_out.prediction.index).date()
-            df.loc['end_date', testlabel] = max(reg_out.prediction.index).date()
-            df.loc['author', testlabel] = author
+                df.loc['start_date', testlabel] = str(min(reg_out.prediction.index).date())
+                df.loc['end_date', testlabel] = str(max(reg_out.prediction.index).date())
+                df.loc['author', testlabel] = author
             
             # Store enhanced results for plotting
             results[testlabel] = reg_out.copy()
@@ -675,7 +772,8 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
     return df, results
 
 
-def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, param_grid={}, tag=None):
+def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, param_grid={}, tag=None, 
+            etf_symbols=None, target_etf=None, start_date=None):
     """
     Walk-forward simulation engine for time-series backtesting.
     
@@ -698,9 +796,9 @@ def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, para
         tag (str): Identifier for caching and logging purposes
         
     Returns:
-        tuple: (prediction_results_df, fitted_models_list)
+        tuple: (prediction_results_df, metadata_dict)
             - prediction_results_df: DataFrame with predictions and metadata
-            - fitted_models_list: List of trained model objects for analysis
+            - metadata_dict: Simulation metadata for complexity analysis and reproducibility
             
     Example:
         >>> results, models = Simulate(
@@ -713,12 +811,18 @@ def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, para
     regout = pd.DataFrame(index=y.index)
     fit_list = []
 
+    # Generate simulation metadata
+    metadata = generate_simulation_metadata(
+        X, y, window_size, window_type, pipe_steps, param_grid, tag,
+        etf_symbols, target_etf, start_date
+    )
+
     date_ranges = generate_train_predict_calender(X, window_type=window_type, window_size=window_size)
 
     if not date_ranges:
         print(f"\nWarning: Not enough data to run simulation for tag '{tag}' with window size {window_size}.")
         print(f"    Required data points: >{window_size}, Data points available: {len(X)}")
-        return pd.DataFrame(), []
+        return pd.DataFrame(), metadata
 
     fit_obj = Pipeline(steps=pipe_steps).set_output(transform="pandas")
     fit_obj.set_params(**param_grid)
@@ -746,7 +850,7 @@ def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, para
         regout.loc[prediction_date, 'prediction'] = prediction
 
     print(f"Simulation for {tag} complete.")
-    return regout.dropna(), fit_list
+    return regout.dropna(), metadata
 
 
 def load_and_prepare_data(etf_list, target_etf, start_date=None):
@@ -878,6 +982,7 @@ def main():
 
         regout_list = []
         sweep_tags = []
+        metadata_list = []
 
         # --- Run Enhanced Simulation Sweep ---
         logger.info(f"Running {len(sweep_combinations)} strategy combinations...")
@@ -894,13 +999,16 @@ def main():
                 ('final_estimator', StatsModelsWrapper_with_OLS())
             ]
 
-            regout_df, _ = Simulate(
+            regout_df, metadata = Simulate(
                 X=X_processed[ewa_lag],
                 y=y_processed[ewa_lag],
                 window_size=config["window_size"],
                 window_type=config["window_type"],
                 pipe_steps=pipe_steps,
-                tag=tag
+                tag=tag,
+                etf_symbols=config["feature_etfs"],
+                target_etf=config["target_etf"],
+                start_date=config["start_date"]
             )
 
             # If simulation produced no results, skip to the next sweep
@@ -921,6 +1029,7 @@ def main():
                 
                 regout_list.append(regout_df)
                 sweep_tags.append(tag)
+                metadata_list.append(metadata)
                 
                 logger.info(f"✅ Strategy {tag} completed successfully")
                 
@@ -943,7 +1052,8 @@ def main():
             target_etf=config["target_etf"],
             feature_etfs=config["feature_etfs"],
             benchmark_manager=benchmark_manager,
-            config=config
+            config=config,
+            metadata_list=metadata_list
         )
         
         print("\n📊 ENHANCED PERFORMANCE SUMMARY")

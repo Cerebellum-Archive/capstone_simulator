@@ -110,11 +110,21 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
 # Utility functions from our custom library  
-from utils_simulate import (
-    simplify_teos, log_returns, generate_train_predict_calender,
-    StatsModelsWrapper_with_OLS, p_by_year, EWMTransformer,
-    create_results_xarray, plot_xarray_results, calculate_performance_metrics
-)
+try:
+    from .utils_simulate import (
+        simplify_teos, log_returns, generate_train_predict_calender,
+        StatsModelsWrapper_with_OLS, p_by_year, EWMTransformer,
+        create_results_xarray, plot_xarray_results, calculate_performance_metrics,
+        get_complexity_score, calculate_complexity_adjusted_metrics
+    )
+except ImportError:
+    # Fallback for direct execution or testing
+    from utils_simulate import (
+        simplify_teos, log_returns, generate_train_predict_calender,
+        StatsModelsWrapper_with_OLS, p_by_year, EWMTransformer,
+        create_results_xarray, plot_xarray_results, calculate_performance_metrics,
+        get_complexity_score, calculate_complexity_adjusted_metrics
+    )
 
 
 
@@ -252,16 +262,20 @@ def generate_simulation_hash(X, y_multi, window_size, window_type, pipe_steps, p
     ]
     
     hash_string = '_'.join(hash_components)
-    return hashlib.md5(hash_string.encode()).hexdigest(), metadata
+    hash_value = hashlib.md5(hash_string.encode()).hexdigest()
+    return hash_value, metadata
 
 def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
     """
-    Save simulation results and metadata to disk for future reuse and full reconstruction.
+    Save simulation results and metadata to xarray.zarr for modern data storage.
     
     Educational Note:
-        Saving comprehensive metadata enables complete reproducibility,
-        which is essential for regulatory compliance, peer review, and 
-        production deployment in quantitative finance.
+        Using xarray.zarr provides:
+        - Self-describing data with built-in metadata
+        - Cloud-ready storage format (netCDF4/HDF5 backend)  
+        - Native multi-dimensional array support
+        - Compression and chunking for large datasets
+        - Future-proof alternative to pickle
     
     Args:
         regout_df (pd.DataFrame): Simulation results
@@ -272,40 +286,133 @@ def save_simulation_results(regout_df, simulation_hash, tag, metadata=None):
     Returns:
         str: Path to saved cache file
     """
+    import xarray as xr
+    
     os.makedirs('cache', exist_ok=True)
-    cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
+    cache_filename = f'cache/simulation_{simulation_hash}_{tag}.zarr'
     
-    # Package results with metadata
-    cache_data = {
-        'results': regout_df,
-        'metadata': metadata,
-        'cache_version': '2.0',  # Version for backward compatibility
-        'save_timestamp': datetime.now().isoformat()
-    }
+    # Convert DataFrame to xarray Dataset with proper time indexing
+    ds = xr.Dataset.from_dataframe(regout_df)
     
-    with open(cache_filename, 'wb') as f:
-        pickle.dump(cache_data, f)
+    # Add comprehensive metadata as attributes
+    ds.attrs['simulation_hash'] = simulation_hash
+    ds.attrs['strategy_tag'] = tag
+    ds.attrs['cache_version'] = '3.0'  # New zarr-based version
+    ds.attrs['save_timestamp'] = datetime.now().isoformat()
+    ds.attrs['born_on_date'] = datetime.now().isoformat()  # Born on date!
     
-    print(f"Saved simulation results with metadata: {cache_filename}")
+    # Add full metadata if provided
     if metadata:
-        print(f"  - Simulation recreatable from: {metadata['data_source']['start_date']} to {metadata['data_source']['end_date']}")
-        print(f"  - Features: {len(metadata['data_source']['data_shapes']['feature_columns'])} columns")
-        print(f"  - Targets: {len(metadata['data_source']['data_shapes']['target_columns'])} columns")
+        # Flatten nested metadata for xarray attributes (must be JSON serializable)
+        ds.attrs['creation_timestamp'] = metadata.get('simulation_info', {}).get('creation_timestamp', ds.attrs['save_timestamp'])
+        ds.attrs['framework_version'] = metadata.get('simulation_info', {}).get('framework_version', '0.1.0')
+        ds.attrs['python_version'] = metadata.get('simulation_info', {}).get('python_version', 'unknown')
+        
+        # Data source info
+        data_source = metadata.get('data_source', {})
+        ds.attrs['etf_symbols'] = str(data_source.get('etf_symbols', []))
+        ds.attrs['target_etfs'] = str(data_source.get('target_etfs', []))
+        ds.attrs['start_date'] = data_source.get('start_date', 'unknown')
+        ds.attrs['end_date'] = data_source.get('end_date', 'unknown')
+        
+        # Model config
+        model_config = metadata.get('model_config', {})
+        ds.attrs['pipeline_string'] = model_config.get('pipeline_string', 'unknown')
+        ds.attrs['param_grid'] = str(model_config.get('param_grid', {}))
+        
+        # Training params  
+        training_params = metadata.get('training_params', {})
+        ds.attrs['window_size'] = training_params.get('window_size', 'unknown')
+        ds.attrs['window_type'] = training_params.get('window_type', 'unknown')
+        ds.attrs['train_frequency'] = training_params.get('train_frequency', 'unknown')
+        
+        # Position strategy
+        position_strategy = metadata.get('position_strategy', {})
+        ds.attrs['position_function'] = position_strategy.get('function_name', 'unknown')
+        ds.attrs['strategy_type'] = position_strategy.get('strategy_type', 'unknown')
+        
+        print(f"✅ Saved with full metadata including born_on_date: {ds.attrs['creation_timestamp']}")
+    else:
+        print(f"⚠️ Saved without metadata - only basic info available")
+    
+    # Save to zarr with compression
+    ds.to_zarr(cache_filename, mode='w', consolidated=True)
+    
+    print(f"📦 Saved simulation results to zarr: {cache_filename}")
+    if metadata and 'data_source' in metadata:
+        data_source = metadata['data_source']
+        print(f"  - Simulation period: {data_source.get('start_date', 'unknown')} to {data_source.get('end_date', 'unknown')}")
+        if 'data_shapes' in data_source:
+            shapes = data_source['data_shapes']
+            print(f"  - Features: {len(shapes.get('feature_columns', []))} columns")
+            print(f"  - Targets: {len(shapes.get('target_columns', []))} columns")
     
     return cache_filename
 
 def load_simulation_results(simulation_hash, tag):
     """
-    Load cached simulation results and metadata if they exist.
+    Load cached simulation results and metadata from zarr or legacy pickle.
     
     Returns:
         tuple: (results_df, metadata_dict) or (None, None) if not found
     """
-    cache_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
+    import xarray as xr
     
-    if os.path.exists(cache_filename):
-        print(f"Loading cached results: {cache_filename}")
-        with open(cache_filename, 'rb') as f:
+    # Try zarr format first (modern)
+    zarr_filename = f'cache/simulation_{simulation_hash}_{tag}.zarr'
+    if os.path.exists(zarr_filename):
+        print(f"📦 Loading zarr cache: {zarr_filename}")
+        
+        try:
+            ds = xr.open_zarr(zarr_filename)
+            
+            # Convert back to DataFrame for compatibility
+            results_df = ds.to_dataframe()
+            
+            # Extract metadata from attributes
+            attrs = ds.attrs
+            metadata = {
+                'simulation_info': {
+                    'creation_timestamp': attrs.get('creation_timestamp', attrs.get('born_on_date', 'unknown')),
+                    'framework_version': attrs.get('framework_version', '0.1.0'),
+                    'python_version': attrs.get('python_version', 'unknown'),
+                    'tag': attrs.get('strategy_tag', tag)
+                },
+                'data_source': {
+                    'start_date': attrs.get('start_date', 'unknown'),
+                    'end_date': attrs.get('end_date', 'unknown'),
+                    'etf_symbols': eval(attrs.get('etf_symbols', '[]')) if attrs.get('etf_symbols') != '[]' else [],
+                    'target_etfs': eval(attrs.get('target_etfs', '[]')) if attrs.get('target_etfs') != '[]' else []
+                },
+                'model_config': {
+                    'pipeline_string': attrs.get('pipeline_string', 'unknown'),
+                    'param_grid': eval(attrs.get('param_grid', '{}')) if attrs.get('param_grid') != '{}' else {}
+                },
+                'training_params': {
+                    'window_size': attrs.get('window_size', 'unknown'),
+                    'window_type': attrs.get('window_type', 'unknown'),
+                    'train_frequency': attrs.get('train_frequency', 'unknown')
+                },
+                'position_strategy': {
+                    'function_name': attrs.get('position_function', 'unknown'),
+                    'strategy_type': attrs.get('strategy_type', 'unknown')
+                }
+            }
+            
+            print(f"✅ Loaded zarr with metadata - born_on_date: {metadata['simulation_info']['creation_timestamp']}")
+            print(f"  - Data period: {metadata['data_source']['start_date']} to {metadata['data_source']['end_date']}")
+            
+            return results_df, metadata
+            
+        except Exception as e:
+            print(f"⚠️ Error loading zarr: {e}, falling back to pickle")
+    
+    # Fallback to legacy pickle format
+    pkl_filename = f'cache/simulation_{simulation_hash}_{tag}.pkl'
+    if os.path.exists(pkl_filename):
+        print(f"📁 Loading legacy pickle cache: {pkl_filename}")
+        
+        with open(pkl_filename, 'rb') as f:
             cache_data = pickle.load(f)
         
         # Handle both old and new cache formats
@@ -323,6 +430,265 @@ def load_simulation_results(simulation_hash, tag):
             return cache_data, None
     
     return None, None
+
+def reconstruct_pipeline_from_metadata(simulation_hash, tag):
+    """
+    Reconstruct the complete ML pipeline from zarr metadata for reproducibility.
+    
+    Educational Note:
+        This demonstrates full reproducibility in quantitative finance - the ability
+        to exactly recreate any historical simulation from stored metadata. This is
+        critical for regulatory audits, peer review, and production deployment.
+    
+    Args:
+        simulation_hash (str): Unique simulation identifier
+        tag (str): Strategy tag
+        
+    Returns:
+        dict: Complete pipeline configuration ready for re-execution
+        None: If metadata insufficient for reconstruction
+    """
+    # Load the cached results and metadata
+    results_df, metadata = load_simulation_results(simulation_hash, tag)
+    
+    if not metadata:
+        print(f"❌ Cannot reconstruct pipeline - no metadata found")
+        return None
+    
+    print(f"🔄 Reconstructing pipeline from metadata:")
+    print(f"  - Born on: {metadata['simulation_info']['creation_timestamp']}")
+    print(f"  - Strategy: {metadata['position_strategy']['strategy_type']}")
+    
+    # Parse pipeline string to rebuild sklearn pipeline
+    pipeline_string = metadata['model_config']['pipeline_string']
+    param_grid = metadata['model_config']['param_grid']
+    
+    # Reconstruct sklearn pipeline steps
+    pipeline_steps = []
+    try:
+        # Parse common pipeline patterns
+        if 'StandardScaler()' in pipeline_string:
+            from sklearn.preprocessing import StandardScaler
+            pipeline_steps.append(('scaler', StandardScaler()))
+            
+        if 'EWMTransformer' in pipeline_string:
+            # Extract halflife if present
+            from utils_simulate import EWMTransformer
+            if 'halflife=' in pipeline_string:
+                import re
+                halflife_match = re.search(r'halflife=(\d+)', pipeline_string)
+                halflife = int(halflife_match.group(1)) if halflife_match else 4
+            else:
+                halflife = 4
+            pipeline_steps.append(('ewm', EWMTransformer(halflife=halflife)))
+        
+        # Parse estimator
+        if 'LinearRegression()' in pipeline_string:
+            from sklearn.linear_model import LinearRegression
+            pipeline_steps.append(('estimator', LinearRegression()))
+            
+        elif 'HuberRegressor' in pipeline_string:
+            from sklearn.linear_model import HuberRegressor
+            # Extract epsilon if present
+            if 'ε=' in pipeline_string:
+                import re
+                eps_match = re.search(r'ε=([0-9.]+)', pipeline_string)
+                epsilon = float(eps_match.group(1)) if eps_match else 1.35
+            else:
+                epsilon = 1.35
+            pipeline_steps.append(('estimator', HuberRegressor(epsilon=epsilon)))
+            
+        elif 'ElasticNet' in pipeline_string:
+            from sklearn.linear_model import ElasticNet
+            # Extract alpha and l1_ratio if present
+            alpha = 0.01
+            l1_ratio = 0.5
+            if 'α=' in pipeline_string:
+                import re
+                alpha_match = re.search(r'α=([0-9.]+)', pipeline_string)
+                alpha = float(alpha_match.group(1)) if alpha_match else 0.01
+            if 'l1=' in pipeline_string:
+                import re
+                l1_match = re.search(r'l1=([0-9.]+)', pipeline_string)
+                l1_ratio = float(l1_match.group(1)) if l1_match else 0.5
+            pipeline_steps.append(('estimator', ElasticNet(alpha=alpha, l1_ratio=l1_ratio)))
+            
+        elif 'RandomForest' in pipeline_string:
+            from sklearn.ensemble import RandomForestRegressor
+            # Extract n_estimators if present
+            n_estimators = 50
+            if 'n_est=' in pipeline_string:
+                import re
+                n_est_match = re.search(r'n_est=(\d+)', pipeline_string)
+                n_estimators = int(n_est_match.group(1)) if n_est_match else 50
+            pipeline_steps.append(('estimator', RandomForestRegressor(n_estimators=n_estimators, random_state=42)))
+        
+        else:
+            print(f"⚠️ Unknown estimator in pipeline: {pipeline_string}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error parsing pipeline string '{pipeline_string}': {e}")
+        return None
+    
+    if not pipeline_steps:
+        print(f"❌ No valid pipeline steps found in: {pipeline_string}")
+        return None
+    
+    # Build sklearn Pipeline
+    from sklearn.pipeline import Pipeline
+    reconstructed_pipeline = Pipeline(pipeline_steps)
+    
+    # Determine position sizing function
+    position_func_name = metadata['position_strategy']['function_name']
+    strategy_type = metadata['position_strategy']['strategy_type']
+    
+    # Map strategy types to position sizing classes
+    if strategy_type == 'equal_weight':
+        position_sizer = EqualWeightSizer(params=[1.0])  # base_leverage
+        position_params = {'base_leverage': 1.0}
+    elif strategy_type == 'confidence_weighted':
+        position_sizer = ConfidenceWeightedSizer(params=[2.0])  # max_leverage
+        position_params = {'max_leverage': 2.0}
+    elif strategy_type == 'long_short':
+        position_sizer = LongShortSizer(params=[1.0])  # base_leverage
+        position_params = {'base_leverage': 1.0}
+    else:
+        print(f"⚠️ Unknown strategy type: {strategy_type}")
+        position_sizer = None
+        position_params = {}
+    
+    # Create complete pipeline configuration 
+    pipeline_config = {
+        'simulation_hash': simulation_hash,
+        'strategy_tag': tag,
+        'born_on_date': metadata['simulation_info']['creation_timestamp'],
+        
+        # Model pipeline
+        'sklearn_pipeline': reconstructed_pipeline,
+        'pipeline_steps': [step[0] for step in pipeline_steps],
+        'estimator': pipeline_steps[-1][1],  # Last step should be estimator
+        
+        # Training configuration
+        'window_size': metadata['training_params'].get('window_size', 252),
+        'window_type': metadata['training_params'].get('window_type', 'rolling'),
+        'train_frequency': metadata['training_params'].get('train_frequency', 'weekly'),
+        
+        # Position sizing
+        'position_sizer': position_sizer,
+        'position_params': position_params,
+        'strategy_type': strategy_type,
+        
+        # Data configuration
+        'etf_symbols': metadata['data_source'].get('etf_symbols', []),
+        'target_etfs': metadata['data_source'].get('target_etfs', []),
+        'start_date': metadata['data_source'].get('start_date'),
+        'end_date': metadata['data_source'].get('end_date'),
+        
+        # Metadata for verification
+        'original_metadata': metadata
+    }
+    
+    print(f"✅ Pipeline reconstructed successfully:")
+    print(f"  - Estimator: {type(pipeline_config['estimator']).__name__}")
+    print(f"  - Position strategy: {strategy_type}")
+    print(f"  - Training window: {pipeline_config['window_size']} ({pipeline_config['window_type']})")
+    print(f"  - Assets: {len(pipeline_config['target_etfs'])} targets, {len(pipeline_config['etf_symbols'])} features")
+    
+    return pipeline_config
+
+def run_reconstructed_pipeline(pipeline_config, X_new=None, y_new=None):
+    """
+    Execute a reconstructed pipeline on new data or verify against original results.
+    
+    Args:
+        pipeline_config (dict): Configuration from reconstruct_pipeline_from_metadata()
+        X_new (pd.DataFrame, optional): New feature data to run pipeline on
+        y_new (pd.DataFrame, optional): New target data (for training)
+        
+    Returns:
+        pd.DataFrame: Simulation results
+    """
+    if not pipeline_config:
+        print("❌ Invalid pipeline configuration")
+        return None
+        
+    print(f"🚀 Running reconstructed pipeline:")
+    print(f"  - Born on: {pipeline_config['born_on_date']}")
+    print(f"  - Strategy: {pipeline_config['strategy_type']}")
+    
+    # If no new data provided, verify we can run the original configuration
+    if X_new is None or y_new is None:
+        print("ℹ️ No new data provided - pipeline ready for execution")
+        print("  Use run_multi_target_simulation() with this config to execute")
+        return pipeline_config
+    
+    # Execute the pipeline on new data
+    sklearn_pipeline = pipeline_config['sklearn_pipeline']
+    position_sizer = pipeline_config['position_sizer']
+    
+    try:
+        # Multi-target execution - wrap in MultiOutputRegressor if needed
+        if len(pipeline_config['target_etfs']) > 1:
+            from sklearn.multioutput import MultiOutputRegressor
+            # Wrap the pipeline in MultiOutputRegressor for multi-target support
+            multi_pipeline = MultiOutputRegressor(sklearn_pipeline)
+            multi_pipeline.fit(X_new, y_new)
+            predictions = multi_pipeline.predict(X_new)
+        else:
+            # Single target - direct pipeline usage
+            sklearn_pipeline.fit(X_new, y_new.iloc[:, 0])  # Single column
+            predictions = sklearn_pipeline.predict(X_new)
+        
+        # Apply position sizing
+        if position_sizer:
+            # Apply position sizing row by row (as position sizers expect Series)
+            positions_list = []
+            target_etfs = pipeline_config['target_etfs']
+            
+            for i, (idx, row_preds) in enumerate(pd.DataFrame(predictions, columns=target_etfs, index=X_new.index).iterrows()):
+                weights = position_sizer.calculate_weights(row_preds)
+                positions_list.append(weights)
+            
+            # Convert to DataFrame with proper structure
+            positions = pd.DataFrame(positions_list, columns=target_etfs, index=X_new.index)
+        else:
+            positions = predictions  # Fallback
+        
+        # Create results DataFrame with multi-target support
+        if len(pipeline_config['target_etfs']) > 1:
+            # Multi-target case: return predictions and positions as separate columns per ETF
+            results = pd.DataFrame(index=X_new.index)
+            
+            # Add prediction columns
+            pred_df = pd.DataFrame(predictions, columns=pipeline_config['target_etfs'], index=X_new.index)
+            for etf in pipeline_config['target_etfs']:
+                results[f'pred_{etf}'] = pred_df[etf]
+                
+            # Add position columns
+            if hasattr(positions, 'columns'):
+                for etf in pipeline_config['target_etfs']:
+                    results[f'pos_{etf}'] = positions[etf]
+            else:
+                results['positions'] = positions.flatten() if hasattr(positions, 'flatten') else positions
+                
+            # Add portfolio-level metrics
+            results['avg_prediction'] = pred_df.mean(axis=1)
+            if hasattr(positions, 'sum'):
+                results['total_leverage'] = positions.abs().sum(axis=1)
+        else:
+            # Single-target case: simple structure
+            results = pd.DataFrame({
+                'predictions': predictions.flatten() if predictions.ndim > 1 else predictions,
+                'positions': positions.flatten() if hasattr(positions, 'flatten') else positions
+            }, index=X_new.index)
+        
+        print(f"✅ Pipeline executed successfully on {len(X_new)} samples")
+        return results
+        
+    except Exception as e:
+        print(f"❌ Error executing reconstructed pipeline: {e}")
+        return None
 
 def generate_train_predict_calendar_with_frequency(X, train_frequency, window_type, window_size):
     """
@@ -1230,7 +1596,7 @@ def create_performance_summary_table(regout_list, sweep_tags, target_etfs):
     
     return summary_df
 
-def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', trange=None):
+def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', trange=None, metadata_list=None):
     """
     Calculates comprehensive statistics for multi-target strategies.
     """
@@ -1263,6 +1629,81 @@ def sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', tr
             'portfolio_sharpe': sharpe,
             'avg_leverage': reg_out.leverage.mean()
         }
+        
+        # Model complexity analysis from metadata/hash
+        if metadata_list and n < len(metadata_list) and metadata_list[n]:
+            try:
+                metadata = metadata_list[n]
+                
+                # Extract model configuration from metadata
+                if 'model_config' in metadata and 'pipe_steps' in metadata['model_config']:
+                    pipe_steps = metadata['model_config']['pipe_steps']
+                    param_grid = metadata['model_config'].get('param_grid', {})
+                    
+                    # Create a mock estimator from the pipeline configuration
+                    try:
+                        # Find the final estimator in the pipeline
+                        final_estimator = None
+                        for step_name, step_obj in pipe_steps:
+                            if hasattr(step_obj, 'predict'):  # This is likely the final estimator
+                                final_estimator = step_obj
+                        
+                        if final_estimator is not None:
+                            # Apply any parameters from param_grid
+                            if param_grid:
+                                final_estimator.set_params(**param_grid)
+                            
+                            complexity_score = get_complexity_score(final_estimator)
+                            results_dict[testlabel]['complexity_score'] = complexity_score
+                            
+                            # Calculate complexity-adjusted metrics
+                            if not reg_out.portfolio_ret.empty:
+                                complexity_metrics = calculate_complexity_adjusted_metrics(reg_out.portfolio_ret, complexity_score)
+                                results_dict[testlabel]['complexity_adj_return'] = complexity_metrics['complexity_adjusted_return']
+                                results_dict[testlabel]['complexity_adj_sharpe'] = complexity_metrics['complexity_adjusted_sharpe']
+                                results_dict[testlabel]['complexity_efficiency'] = complexity_metrics['complexity_efficiency']
+                                results_dict[testlabel]['overfitting_penalty'] = complexity_metrics['overfitting_penalty']
+                            else:
+                                results_dict[testlabel]['complexity_adj_return'] = np.nan
+                                results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+                                results_dict[testlabel]['complexity_efficiency'] = np.nan
+                                results_dict[testlabel]['overfitting_penalty'] = np.nan
+                        else:
+                            # Default complexity score if no final estimator found
+                            results_dict[testlabel]['complexity_score'] = 2.0  # Default for unknown
+                            results_dict[testlabel]['complexity_adj_return'] = np.nan
+                            results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+                            results_dict[testlabel]['complexity_efficiency'] = np.nan
+                            results_dict[testlabel]['overfitting_penalty'] = np.nan
+                            
+                    except Exception as inner_e:
+                        logger.warning(f"Could not reconstruct model from metadata for {testlabel}: {inner_e}")
+                        results_dict[testlabel]['complexity_score'] = 2.0  # Default for unknown
+                        results_dict[testlabel]['complexity_adj_return'] = np.nan
+                        results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+                        results_dict[testlabel]['complexity_efficiency'] = np.nan
+                        results_dict[testlabel]['overfitting_penalty'] = np.nan
+                else:
+                    # No model config in metadata
+                    results_dict[testlabel]['complexity_score'] = np.nan
+                    results_dict[testlabel]['complexity_adj_return'] = np.nan
+                    results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+                    results_dict[testlabel]['complexity_efficiency'] = np.nan
+                    results_dict[testlabel]['overfitting_penalty'] = np.nan
+                    
+            except Exception as e:
+                logger.warning(f"Could not calculate complexity score from metadata for {testlabel}: {e}")
+                results_dict[testlabel]['complexity_score'] = np.nan
+                results_dict[testlabel]['complexity_adj_return'] = np.nan
+                results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+                results_dict[testlabel]['complexity_efficiency'] = np.nan
+                results_dict[testlabel]['overfitting_penalty'] = np.nan
+        else:
+            results_dict[testlabel]['complexity_score'] = np.nan
+            results_dict[testlabel]['complexity_adj_return'] = np.nan
+            results_dict[testlabel]['complexity_adj_sharpe'] = np.nan
+            results_dict[testlabel]['complexity_efficiency'] = np.nan
+            results_dict[testlabel]['overfitting_penalty'] = np.nan
 
         # Multi-target prediction metrics
         prediction_cols = [col for col in reg_out.columns if col.startswith('pred_')]
@@ -1526,15 +1967,15 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         DataFrame with predictions, actuals, and portfolio performance
     """
     # Generate unique hash for this simulation configuration
-    simulation_hash = generate_simulation_hash(
+    simulation_hash, metadata = generate_simulation_hash(
         X, y_multi, window_size, window_type, pipe_steps, param_grid, tag, 
         position_func, position_params, train_frequency
     )
     
     # Try to load cached results first
     if use_cache:
-        cached_result = load_simulation_results(simulation_hash, tag)
-        if cached_result is not None:
+        cached_result, metadata = load_simulation_results(simulation_hash, tag)
+        if cached_result is not None and not cached_result.empty:
             logger.info(f"Using cached results for {tag}")
             return cached_result
     
@@ -1659,7 +2100,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     
     # Save results to cache
     if use_cache:
-        save_simulation_results(regout_clean, simulation_hash, tag)
+        save_simulation_results(regout_clean, simulation_hash, tag, metadata)
 
     logger.info(f"Multi-target simulation for {tag} complete.")
     return regout_clean
@@ -2138,7 +2579,7 @@ def main():
         print(f"Performance summary saved to: {summary_csv_path}")
         
         # Save detailed statistics to CSV
-        stats_results = sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG')
+        stats_results = sim_stats_multi_target(regout_list, sweep_tags, target_etfs, author='CG', metadata_list=None)
         if stats_results is not None and not stats_results.empty:
             stats_df = pd.DataFrame(stats_results).T  # Transpose for better CSV format
             stats_csv_path = os.path.join(config['csv_output_dir'], f"{timestamp}_detailed_statistics.csv")
@@ -2162,29 +2603,39 @@ def main():
         # Create professional tear sheet and benchmark analysis
         logger.info("Generating professional tear sheet and benchmark analysis...")
         try:
+            print("🔍 Starting plotting functions...")
             from plotting_utils import (create_tear_sheet, create_simple_comparison_plot,
                                        plot_strategy_vs_benchmarks, create_benchmark_comparison_heatmap)
+            print("✅ Successfully imported plotting_utils")
             
             # Generate professional tear sheet
+            print("📊 Creating tear sheet...")
             pdf_path = create_tear_sheet(regout_list, sweep_tags, config)
+            print(f"📊 Tear sheet result: {pdf_path}")
             if pdf_path:
                 logger.info(f"✅ Professional tear sheet created: {pdf_path}")
             
             # Create benchmark comparison heatmap
+            print("📊 Creating heatmap...")
             heatmap_path = create_benchmark_comparison_heatmap(regout_list, sweep_tags, config)
+            print(f"📊 Heatmap result: {heatmap_path}")
             if heatmap_path:
                 logger.info(f"📊 Benchmark comparison heatmap created: {heatmap_path}")
             
             # Create individual strategy vs benchmark plots
+            print("📊 Creating individual plots...")
             for regout_df, tag in zip(regout_list, sweep_tags):
                 benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
                 if benchmark_cols:
                     plot_path = plot_strategy_vs_benchmarks(regout_df, tag, config)
+                    print(f"📊 Individual plot for {tag}: {plot_path}")
                     if plot_path:
                         logger.info(f"📈 Strategy benchmark plot created: {plot_path}")
             
             # Also create simple comparison plot
+            print("📊 Creating simple comparison plot...")
             simple_plot = create_simple_comparison_plot(regout_list, sweep_tags, config)
+            print(f"📊 Simple plot result: {simple_plot}")
             if simple_plot:
                 logger.info(f"📈 Simple comparison plot created: {simple_plot}")
             
@@ -2192,6 +2643,7 @@ def main():
             display_performance_summary_table(regout_list, sweep_tags)
             
         except Exception as e:
+            print(f"❌ ERROR in plotting functions: {str(e)}")
             logger.error(f"Warning: Could not generate tear sheet: {str(e)}")
             import traceback
             traceback.print_exc()

@@ -23,6 +23,7 @@ A hands-on educational platform for **financial engineering students** to develo
 - [Quick Wins - Copy & Paste Examples](#quick-wins---copy--paste-examples)
 - [Repository Structure](#repository-structure)
 - [Framework Components](#framework-components)
+- [Model Complexity Scoring & Overfitting Detection](#-model-complexity-scoring--overfitting-detection)
 - [Example Workflow](#example-workflow-full-research-cycle)
 - [Student Exercises & Capstone Ideas](#student-exercises--capstone-ideas)
 - [Performance Expectations](#performance-expectations)
@@ -95,7 +96,9 @@ from capstone_simulator import (
     log_returns, 
     EWMTransformer, 
     create_results_xarray,
-    calculate_performance_metrics
+    calculate_performance_metrics,
+    get_complexity_score,
+    calculate_complexity_adjusted_metrics
 )
 
 # Run simulations programmatically
@@ -145,6 +148,21 @@ metrics = calculate_performance_metrics(results_xr)
 print(f"Sharpe Ratio: {metrics['sharpe']:.2f}")
 ```
 
+### Check Model Complexity & Overfitting Risk
+```python
+from capstone_simulator import get_complexity_score, calculate_complexity_adjusted_metrics
+
+# Get complexity score for any sklearn model
+complexity = get_complexity_score(your_model)
+print(f"Model complexity score: {complexity:.2f}")
+
+# Get complexity-adjusted performance metrics
+adj_metrics = calculate_complexity_adjusted_metrics(strategy_returns, complexity)
+print(f"Raw Sharpe: {adj_metrics['sharpe_ratio']:.2f}")
+print(f"Complexity-Adjusted Sharpe: {adj_metrics['complexity_adjusted_sharpe']:.2f}")
+print(f"Overfitting Risk: {1 - adj_metrics['overfitting_penalty']:.1%}")
+```
+
 ## Repository Structure
 
 ```
@@ -183,6 +201,53 @@ quant_trading_simulator/
 - **🌐 Interactive HTML Tutorial**: Browser-based tutorial with print-to-PDF capability
 - **Data Dictionary**: Blue Water Macro's ERM3 model documentation
 - **Implementation Guides**: Best practices and advanced techniques
+
+## 🧠 Model Complexity Scoring & Overfitting Detection
+
+The framework includes sophisticated **model complexity analysis** to help identify and mitigate overfitting risks—a critical concern in quantitative finance where complex models may capture noise rather than genuine market signals.
+
+### Key Features
+
+- **🎯 Automated Complexity Scoring**: Each model receives a complexity score based on its architecture and hyperparameters
+- **📊 Complexity-Adjusted Metrics**: Performance metrics adjusted for model complexity to identify truly robust strategies
+- **⚖️ Overfitting Risk Assessment**: Early warning system for models that may not generalize well
+- **🔍 Meta-Analysis Tools**: Compare strategies with similar complexity scores for fair evaluation
+
+### Complexity Score Examples
+
+```python
+from capstone_simulator import get_complexity_score, calculate_complexity_adjusted_metrics
+
+# Simple models (lower scores = less overfitting risk)
+ridge_model = Ridge(alpha=1.0)          # Score: ~0.5
+ols_model = LinearRegression()          # Score: 1.0 (baseline)
+
+# Complex models (higher scores = higher overfitting risk) 
+rf_model = RandomForestRegressor()      # Score: ~11.0
+xgb_model = XGBRegressor()             # Score: ~2.3
+
+# Hyperparameter search amplifies complexity
+grid_search = GridSearchCV(rf_model, param_grid) # Score: ~50+ (depending on search space)
+
+# Calculate complexity-adjusted performance metrics
+returns = your_strategy_returns
+complexity_metrics = calculate_complexity_adjusted_metrics(returns, complexity_score)
+
+print(f"Raw Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+print(f"Complexity-Adjusted Sharpe: {complexity_metrics['complexity_adjusted_sharpe']:.2f}")
+print(f"Overfitting Risk Score: {complexity_metrics['overfitting_penalty']:.2f}")
+```
+
+### Educational Value
+
+Understanding model complexity teaches crucial quantitative finance concepts:
+
+- **🎓 Bias-Variance Trade-off**: Balance between model flexibility and generalization
+- **🔬 Out-of-Sample Robustness**: Why simpler models often perform better in production
+- **📈 Production Deployment**: How complexity affects real-world trading performance
+- **⚡ Risk Management**: Early detection of potentially unreliable signals
+
+The complexity scoring system integrates seamlessly with the framework's metadata system, automatically calculating scores based on simulation configurations stored in the reproducible hash system.
 
 ## Example Workflow (Full Research Cycle)
 

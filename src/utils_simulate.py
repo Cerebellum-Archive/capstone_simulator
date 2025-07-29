@@ -20,11 +20,21 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 import seaborn as sns
+import math
 from sklearn.metrics import r2_score as r_squared
 from sklearn.feature_selection import r_regression, f_regression, mutual_info_regression
 from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+try:
+    from sklearn.experimental import enable_halving_search_cv
+    from sklearn.model_selection import HalvingGridSearchCV, HalvingRandomSearchCV
+except ImportError:
+    # Fallback for older sklearn versions
+    HalvingGridSearchCV = GridSearchCV
+    HalvingRandomSearchCV = RandomizedSearchCV
 from statsmodels.tools import add_constant
 from statsmodels.regression.linear_model import OLS
+from scipy.stats import randint, uniform, loguniform
 from typing import Dict, List, Optional, Union, Tuple
 
 
@@ -483,7 +493,16 @@ def calculate_performance_metrics(returns: Union[pd.Series, xr.DataArray]) -> Di
     returns = returns.dropna()
     
     if len(returns) == 0:
-        return {}
+        return {
+            'Annual Return': 0.0,
+            'Volatility': 0.0,
+            'Sharpe Ratio': 0.0,
+            'Maximum Drawdown': 0.0,
+            'Calmar Ratio': 0.0,
+            'Total Return': 0.0,
+            'Win Rate': 0.0,
+            'Observations': 0
+        }
     
     # Calculate metrics
     annual_return = (1 + returns.mean()) ** 252 - 1
@@ -646,3 +665,300 @@ def get_educational_help(topic: str) -> None:
         EDUCATIONAL_FUNCTIONS[topic]()
     else:
         print(f"Available educational topics: {list(EDUCATIONAL_FUNCTIONS.keys())}")
+
+
+# --- Model Complexity Analysis ---
+
+def unwrap_estimator(estimator: BaseEstimator) -> BaseEstimator:
+    """
+    Unwrap multi-output or search wrappers to get the base estimator.
+    
+    Educational Note:
+        In quantitative finance, models are often wrapped in ensemble methods,
+        cross-validation, or multi-output adapters. This function extracts the
+        core estimator to analyze its fundamental complexity properties.
+    
+    Args:
+        estimator: sklearn estimator (potentially wrapped)
+        
+    Returns:
+        Base estimator without wrappers
+    """
+    # Don't unwrap ensemble methods like RandomForest - they should be treated as single estimators
+    ensemble_types = ['RandomForest', 'GradientBoosting', 'AdaBoost', 'Bagging', 'ExtraTrees']
+    cls_name = type(estimator).__name__
+    
+    if any(ensemble_type in cls_name for ensemble_type in ensemble_types):
+        return estimator
+    
+    # Unwrap search CV and multi-output wrappers
+    while hasattr(estimator, 'estimator'):
+        estimator = estimator.estimator
+        # Stop unwrapping if we hit an ensemble method
+        cls_name = type(estimator).__name__
+        if any(ensemble_type in cls_name for ensemble_type in ensemble_types):
+            break
+    
+    return estimator
+
+
+def estimate_search_space_size(params: Dict) -> int:
+    """
+    Estimate the size of the parameter search space for auto-tuning learners.
+    
+    Educational Note:
+        Hyperparameter search spaces contribute to overfitting risk. Larger
+        search spaces allow models to find better fits to training data, but
+        may not generalize well. This function quantifies search complexity.
+    
+    Args:
+        params: Parameter grid or distributions for hyperparameter search
+        
+    Returns:
+        Estimated number of parameter combinations
+        
+    Example:
+        >>> params = {'alpha': [0.1, 1.0, 10.0], 'fit_intercept': [True, False]}
+        >>> size = estimate_search_space_size(params)
+        >>> print(f"Search space size: {size}")  # Output: 6
+    """
+    total_combinations = 1
+    for param, values in params.items():
+        if isinstance(values, (list, tuple)):
+            total_combinations *= len(values)
+        elif hasattr(values, 'rvs'):  # Check if it's a scipy distribution
+            # Approximate continuous distributions with a reasonable number of discrete points
+            total_combinations *= 10  # Assume ~10 effective values for continuous ranges
+        else:
+            total_combinations *= 1  # Single value, no contribution
+    return total_combinations
+
+
+def get_complexity_score(estimator: BaseEstimator) -> float:
+    """
+    Computes a generic complexity score for sklearn estimators, including auto-tuning learners.
+    
+    Higher score indicates higher model complexity, correlating with higher overfitting risk.
+    This is crucial in quantitative finance where overfitting can lead to poor out-of-sample
+    performance and significant trading losses.
+    
+    Educational Note:
+        Model complexity scoring helps researchers identify models that may be too flexible
+        for the available data. In quantitative finance:
+        - Simple models (Linear Regression, Ridge) often generalize better
+        - Complex models (Random Forest, Neural Networks) may capture noise
+        - Hyperparameter search increases effective complexity
+        
+        The score can be used to adjust performance metrics or select models based on
+        complexity-return trade-offs.
+    
+    Scoring System:
+        - OLS (LinearRegression) is baseline 1.0
+        - Regularized linear models (e.g., Ridge) have scores <= 1.0 based on regularization strength
+        - Tree-based models have scores > 1.0 based on depth, number of trees, etc.
+        - Auto-tuning learners (GridSearchCV, etc.) multiply base estimator score by search space factor
+        - Normalized roughly: default RandomForest ~5-10, default XGBoost ~3-5, GridSearchCV ~10x base
+    
+    Args:
+        estimator: sklearn estimator (fitted or unfitted)
+        
+    Returns:
+        Complexity score (float, typically 0.1 to 50.0)
+        
+    Usage:
+        >>> from sklearn.linear_model import Ridge
+        >>> from sklearn.ensemble import RandomForestRegressor
+        >>> 
+        >>> simple_model = Ridge(alpha=1.0)
+        >>> complex_model = RandomForestRegressor(n_estimators=200, max_depth=15)
+        >>> 
+        >>> print(f"Ridge complexity: {get_complexity_score(simple_model):.2f}")
+        >>> print(f"Random Forest complexity: {get_complexity_score(complex_model):.2f}")
+        >>> 
+        >>> # Use in performance analysis
+        >>> complexity_adjusted_return = annual_return / get_complexity_score(model)
+    """
+    # Handle auto-tuning learners
+    if isinstance(estimator, (GridSearchCV, RandomizedSearchCV, HalvingGridSearchCV, HalvingRandomSearchCV)):
+        base_estimator = unwrap_estimator(estimator)
+        base_score = get_complexity_score(base_estimator)  # Recursively get base score
+        
+        # Estimate search space complexity
+        param_grid = estimator.param_grid if hasattr(estimator, 'param_grid') else estimator.param_distributions
+        search_space_size = estimate_search_space_size(param_grid)
+        
+        # For RandomizedSearchCV and HalvingRandomSearchCV, cap the effective size
+        if isinstance(estimator, (RandomizedSearchCV, HalvingRandomSearchCV)):
+            n_iter = estimator.n_iter if hasattr(estimator, 'n_iter') else 10
+            search_space_size = min(search_space_size, n_iter)
+        
+        # Halving searches reduce effective trials, so adjust
+        if isinstance(estimator, (HalvingGridSearchCV, HalvingRandomSearchCV)):
+            factor = estimator.factor if hasattr(estimator, 'factor') else 3
+            search_space_size = max(1, search_space_size // factor)
+        
+        # Multiply base score by log of search space size to reflect overfitting risk
+        return base_score * (1.0 + math.log1p(search_space_size) / math.log(10))  # Log10 for scaling
+
+    # Handle base estimators
+    estimator = unwrap_estimator(estimator)
+    params = estimator.get_params()
+    cls_name = type(estimator).__name__
+    
+    if 'LinearRegression' in cls_name:
+        return 1.0
+    
+    elif 'Ridge' in cls_name:
+        alpha = params.get('alpha', 1.0)
+        return 1.0 / (1.0 + alpha)  # Decreases with stronger regularization, e.g., alpha=1 -> 0.5
+    
+    elif 'Lasso' in cls_name:
+        alpha = params.get('alpha', 1.0)
+        return 1.0 / (1.0 + alpha * 10)  # Stronger penalty for Lasso sparsity
+    
+    elif 'RandomForest' in cls_name:
+        max_depth = params.get('max_depth')
+        if max_depth is None:
+            max_depth = 20  # Assumption for unbounded trees
+        n_estimators = params.get('n_estimators', 100)
+        max_features = params.get('max_features', 1.0)
+        if isinstance(max_features, str):
+            if max_features in ['auto', 'sqrt', 'log2']:
+                max_features = 0.33  # Approximate fraction
+            else:
+                max_features = 1.0
+        elif max_features is None:
+            max_features = 1.0
+        effective_complexity = n_estimators * max_depth * max_features
+        return 1.0 + effective_complexity / 200.0  # Default ~1 + (100*20*1)/200 = 11.0
+
+    elif 'XGB' in cls_name:  # For XGBoost
+        max_depth = params.get('max_depth', 6)
+        n_estimators = params.get('n_estimators', 100)
+        effective_complexity = n_estimators * (2 ** max_depth)
+        return 1.0 + math.log(1 + effective_complexity) / math.log(2) / 10.0  # Default ~2.26
+
+    elif 'DecisionTree' in cls_name:
+        max_depth = params.get('max_depth')
+        if max_depth is None:
+            max_depth = 20
+        return 1.0 + max_depth / 5.0
+
+    elif 'SVC' in cls_name or 'SVR' in cls_name:
+        kernel = params.get('kernel', 'rbf')
+        if kernel == 'linear':
+            return 1.2
+        else:
+            C = params.get('C', 1.0)
+            gamma = params.get('gamma', 'scale')
+            if gamma == 'scale':
+                gamma = 1.0
+            elif gamma == 'auto':
+                gamma = 0.1
+            return 2.0 + math.log(1 + C * gamma)
+
+    elif 'KNeighbors' in cls_name:
+        n_neighbors = params.get('n_neighbors', 5)
+        return 1.0 + 10.0 / n_neighbors
+
+    elif 'MLP' in cls_name:
+        hidden = params.get('hidden_layer_sizes', (100,))
+        if isinstance(hidden, int):
+            hidden = (hidden,)
+        total_neurons = sum(hidden)
+        n_layers = len(hidden)
+        return 1.0 + (n_layers * total_neurons) / 50.0  # Default ~3.0
+
+    else:
+        return 2.0  # Default for unknown estimators
+
+
+def calculate_complexity_adjusted_metrics(returns: Union[pd.Series, xr.DataArray], 
+                                        complexity_score: float) -> Dict[str, float]:
+    """
+    Calculate complexity-adjusted performance metrics for quantitative trading strategies.
+    
+    Educational Note:
+        In quantitative finance, raw performance metrics can be misleading when models
+        of different complexity are compared. Complexity-adjusted metrics help identify
+        strategies that achieve good performance without excessive model complexity,
+        which often leads to better out-of-sample performance.
+        
+        Common adjustments:
+        - Complexity-adjusted return = raw_return / complexity_score
+        - Complexity-adjusted Sharpe = raw_sharpe / sqrt(complexity_score)
+        - Overfitting penalty = 1 - (complexity_score - 1) * 0.1
+    
+    Args:
+        returns: Strategy returns (daily)
+        complexity_score: Model complexity score from get_complexity_score()
+        
+    Returns:
+        Dictionary with complexity-adjusted metrics
+        
+    Example:
+        >>> returns = pd.Series([0.01, -0.005, 0.02, -0.01])
+        >>> complexity = 5.0  # Random Forest model
+        >>> metrics = calculate_complexity_adjusted_metrics(returns, complexity)
+        >>> print(f"Complexity-adjusted Sharpe: {metrics['complexity_adjusted_sharpe']:.2f}")
+    """
+    # Calculate base metrics
+    base_metrics = calculate_performance_metrics(returns)
+    
+    # Apply complexity adjustments
+    adjusted_metrics = {
+        'complexity_score': complexity_score,
+        'base_annual_return': base_metrics['Annual Return'],
+        'base_sharpe_ratio': base_metrics['Sharpe Ratio'],
+        
+        # Complexity-adjusted metrics
+        'complexity_adjusted_return': base_metrics['Annual Return'] / complexity_score,
+        'complexity_adjusted_sharpe': base_metrics['Sharpe Ratio'] / math.sqrt(complexity_score),
+        
+        # Overfitting penalty (decreases with complexity)
+        'overfitting_penalty': max(0.1, 1.0 - (complexity_score - 1.0) * 0.05),
+        
+        # Complexity efficiency (return per unit complexity)
+        'complexity_efficiency': base_metrics['Annual Return'] / complexity_score if complexity_score > 0 else 0,
+        
+        # Risk-adjusted complexity efficiency
+        'risk_adjusted_efficiency': (base_metrics['Sharpe Ratio'] / complexity_score) if complexity_score > 0 else 0
+    }
+    
+    # Add all base metrics
+    adjusted_metrics.update(base_metrics)
+    
+    return adjusted_metrics
+
+
+# Add complexity scoring to educational functions registry
+EDUCATIONAL_FUNCTIONS['complexity_scoring'] = lambda: print("""
+Model Complexity Scoring in Quantitative Finance
+
+The complexity score helps identify models that may be prone to overfitting:
+
+1. LINEAR MODELS (Score ≤ 1.0):
+   - LinearRegression: 1.0 (baseline)
+   - Ridge(alpha=1.0): 0.5 (regularized)
+   - Lasso(alpha=0.1): 0.09 (sparse)
+
+2. TREE-BASED MODELS (Score > 1.0):
+   - DecisionTree(max_depth=10): 3.0
+   - RandomForest(default): ~11.0
+   - XGBoost(default): ~2.3
+
+3. HYPERPARAMETER SEARCH:
+   - GridSearchCV multiplies base score by search space factor
+   - Larger search spaces = higher overfitting risk
+
+Usage in Trading Strategies:
+- Compare models with similar complexity scores  
+- Use complexity-adjusted Sharpe ratios
+- Prefer simpler models for out-of-sample robustness
+- Monitor complexity vs. performance trade-offs
+
+Educational Value:
+- Teaches the bias-variance trade-off
+- Emphasizes generalization over fitting
+- Promotes disciplined model selection
+""")

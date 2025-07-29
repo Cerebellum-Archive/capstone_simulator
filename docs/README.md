@@ -258,6 +258,39 @@ The framework generates professional tear sheets including:
 5. **Publication-Quality Research**: Generate academic-style performance attribution analysis
 5. **Portfolio Optimization**: Apply Modern Portfolio Theory for asset allocation
 
+## Strategy Pipeline Overview
+
+Comprehensive overview of all implemented strategies with preprocessing, learning algorithms, portfolio construction, and complexity scores:
+
+| Strategy | Preprocessing | Learner | Portfolio Construction | Key Parameters | Complexity Score |
+|----------|---------------|---------|----------------------|----------------|------------------|
+| **mt_linear_std_EqualWeight** | StandardScaler | LinearRegression | Equal allocation across predictions | `base_leverage=1.0` | ⭐ (1/5) |
+| **mt_linear_std_ConfidenceWeighted** | StandardScaler | LinearRegression | Prediction magnitude weighting | `max_leverage=2.0` | ⭐⭐ (2/5) |
+| **mt_linear_std_LongShort** | StandardScaler | LinearRegression | Long top tercile, short bottom tercile | `base_leverage=1.0` | ⭐⭐⭐ (3/5) |
+| **mt_huber_std_EqualWeight** | StandardScaler | HuberRegressor (ε=1.35) | Equal allocation across predictions | `base_leverage=1.0` | ⭐⭐ (2/5) |
+| **mt_huber_std_ConfidenceWeighted** | StandardScaler | HuberRegressor (ε=1.35) | Prediction magnitude weighting | `max_leverage=2.0` | ⭐⭐⭐ (3/5) |
+| **mt_huber_std_LongShort** | StandardScaler | HuberRegressor (ε=1.35) | Long top tercile, short bottom tercile | `base_leverage=1.0` | ⭐⭐⭐⭐ (4/5) |
+| **mt_elasticnet_std_EqualWeight** | StandardScaler | ElasticNet (α=0.01, l1_ratio=0.5) | Equal allocation across predictions | `base_leverage=1.0` | ⭐⭐ (2/5) |
+| **mt_elasticnet_std_ConfidenceWeighted** | StandardScaler | ElasticNet (α=0.01, l1_ratio=0.5) | Prediction magnitude weighting | `max_leverage=2.0` | ⭐⭐⭐ (3/5) |
+| **mt_elasticnet_std_LongShort** | StandardScaler | ElasticNet (α=0.01, l1_ratio=0.5) | Long top tercile, short bottom tercile | `base_leverage=1.0` | ⭐⭐⭐⭐ (4/5) |
+| **st_rf_ewm_Binary** | EWMTransformer (halflife=4) | RandomForestRegressor | Binary long/short based on prediction sign | `n_estimators=50` | ⭐⭐⭐ (3/5) |
+| **st_rf_ewm_Quartile** | EWMTransformer (halflife=4) | RandomForestRegressor | Quartile-based position sizing (0%, 33%, 67%, 100%) | `n_estimators=50` | ⭐⭐⭐⭐ (4/5) |
+| **st_rf_ewm_Proportional** | EWMTransformer (halflife=4) | RandomForestRegressor | Position size proportional to prediction | `n_estimators=50` | ⭐⭐⭐⭐⭐ (5/5) |
+
+### Complexity Score Legend
+- ⭐ **Simple**: Basic pipeline, minimal parameters, easy to interpret
+- ⭐⭐ **Moderate**: Standard ML preprocessing, some portfolio logic
+- ⭐⭐⭐ **Intermediate**: Multiple decision points, ranking-based allocation
+- ⭐⭐⭐⭐ **Advanced**: Sophisticated ML + complex portfolio construction
+- ⭐⭐⭐⭐⭐ **Expert**: High-dimensional optimization, continuous position scaling
+
+### Pipeline Architecture Notes
+- **mt_**: Multi-target strategies using `MultiOutputRegressor` for simultaneous ETF prediction
+- **st_**: Single-target strategies focused on individual asset (e.g., SPY) prediction
+- **StandardScaler**: Z-score normalization for feature standardization
+- **EWMTransformer**: Exponentially weighted moving averages for time-series smoothing
+- **Portfolio Construction**: Three main approaches - equal allocation, confidence weighting, and long-short market-neutral
+
 ## Performance Expectations
 
 Based on historical backtests using Blue Water Macro's methodology (2015-2024):
