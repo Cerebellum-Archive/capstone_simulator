@@ -62,14 +62,7 @@ def _get_strategy_pipeline_data(sweep_tags):
     from sklearn.linear_model import LinearRegression, HuberRegressor, ElasticNet
     from sklearn.ensemble import RandomForestRegressor
     
-    # Fix the relative import issue
-    try:
-        from utils_simulate import get_complexity_score
-    except ImportError:
-        # Fallback if utils_simulate is not available
-        def get_complexity_score(_):
-            """Fallback complexity score function."""
-            return 1.0  # Default complexity score
+    # Note: Complexity scoring has been removed from PDF reports as it is experimental
     
     pipeline_data = []
     
@@ -182,17 +175,12 @@ def _get_strategy_pipeline_data(sweep_tags):
         
         for config_key, config_data in strategy_configs.items():
             if config_key in tag_lower:
-                # Calculate actual complexity score
-                base_complexity = get_complexity_score(config_data['estimator'])
-                total_complexity = base_complexity * config_data['portfolio_multiplier']
-                
                 # Single row with all parameters in correct columns
                 pipeline_data.append({
                     'Strategy': config_data['strategy'],
                     'Preprocessing': config_data['preprocessing'],
                     'Learner': config_data['learner'],
-                    'Portfolio': config_data['portfolio'],
-                    'Complexity': f'{total_complexity:.2f}'
+                    'Portfolio': config_data['portfolio']
                 })
                 config_found = True
                 break
@@ -203,8 +191,7 @@ def _get_strategy_pipeline_data(sweep_tags):
                 'Strategy': tag[:15] + '...' if len(tag) > 15 else tag,
                 'Preprocessing': 'Unknown',
                 'Learner': 'Unknown',
-                'Portfolio': 'Unknown',
-                'Complexity': '?.??'
+                'Portfolio': 'Unknown'
             })
     
     return pipeline_data

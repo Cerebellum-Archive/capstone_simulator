@@ -100,7 +100,7 @@ from capstone_simulator import (
     EWMTransformer, 
     create_results_xarray,
     calculate_performance_metrics,
-    get_complexity_score,
+    get_complexity_score,  # Experimental - see complexity_score.py for contribution guidelines
     calculate_complexity_adjusted_metrics
 )
 
@@ -151,19 +151,20 @@ metrics = calculate_performance_metrics(results_xr)
 print(f"Sharpe Ratio: {metrics['sharpe']:.2f}")
 ```
 
-### Check Model Complexity & Overfitting Risk
+### Check Model Complexity & Overfitting Risk (Experimental)
 ```python
 from capstone_simulator import get_complexity_score, calculate_complexity_adjusted_metrics
 
-# Get complexity score for any sklearn model
+# EXPERIMENTAL: Get complexity score for any sklearn model
+# This feature is under development - contribute improvements via GitHub
 complexity = get_complexity_score(your_model)
-print(f"Model complexity score: {complexity:.2f}")
+print(f"Model complexity score (experimental): {complexity:.2f}")
 
 # Get complexity-adjusted performance metrics
 adj_metrics = calculate_complexity_adjusted_metrics(strategy_returns, complexity)
 print(f"Raw Sharpe: {adj_metrics['sharpe_ratio']:.2f}")
-print(f"Complexity-Adjusted Sharpe: {adj_metrics['complexity_adjusted_sharpe']:.2f}")
-print(f"Overfitting Risk: {1 - adj_metrics['overfitting_penalty']:.1%}")
+print(f"Complexity-Adjusted Sharpe (experimental): {adj_metrics['complexity_adjusted_sharpe']:.2f}")
+print(f"Overfitting Risk (experimental): {1 - adj_metrics['overfitting_penalty']:.1%}")
 ```
 
 ### Avoid yfinance API Limits with Smart Caching
@@ -219,9 +220,11 @@ quant_trading_simulator/
 - **Data Dictionary**: Blue Water Macro's ERM3 model documentation
 - **Implementation Guides**: Best practices and advanced techniques
 
-## 🧠 Model Complexity Scoring & Overfitting Detection
+## 🧠 Model Complexity Scoring & Overfitting Detection (Experimental)
 
-The framework includes sophisticated **model complexity analysis** to help identify and mitigate overfitting risks—a critical concern in quantitative finance where complex models may capture noise rather than genuine market signals.
+The framework includes **experimental model complexity analysis** to help identify and mitigate overfitting risks—a critical concern in quantitative finance where complex models may capture noise rather than genuine market signals.
+
+> **⚠️ Experimental Feature**: The complexity scoring system is under active development. We invite contributions to improve the scoring algorithms and extend support for additional ML models. Please submit improvements via our GitHub repository following the standard pull request process.
 
 ### Key Features
 
@@ -230,30 +233,45 @@ The framework includes sophisticated **model complexity analysis** to help ident
 - **⚖️ Overfitting Risk Assessment**: Early warning system for models that may not generalize well
 - **🔍 Meta-Analysis Tools**: Compare strategies with similar complexity scores for fair evaluation
 
-### Complexity Score Examples
+### Complexity Score Examples (Experimental)
 
 ```python
 from capstone_simulator import get_complexity_score, calculate_complexity_adjusted_metrics
 
 # Simple models (lower scores = less overfitting risk)
-ridge_model = Ridge(alpha=1.0)          # Score: ~0.5
+ridge_model = Ridge(alpha=1.0)          # Score: ~0.5 (experimental)
 ols_model = LinearRegression()          # Score: 1.0 (baseline)
 
 # Complex models (higher scores = higher overfitting risk) 
-rf_model = RandomForestRegressor()      # Score: ~11.0
-xgb_model = XGBRegressor()             # Score: ~2.3
+rf_model = RandomForestRegressor()      # Score: ~11.0 (experimental)
+xgb_model = XGBRegressor()             # Score: ~2.3 (experimental)
 
 # Hyperparameter search amplifies complexity
-grid_search = GridSearchCV(rf_model, param_grid) # Score: ~50+ (depending on search space)
+grid_search = GridSearchCV(rf_model, param_grid) # Score: ~50+ (experimental, depending on search space)
 
-# Calculate complexity-adjusted performance metrics
+# Calculate complexity-adjusted performance metrics (experimental)
 returns = your_strategy_returns
 complexity_metrics = calculate_complexity_adjusted_metrics(returns, complexity_score)
 
 print(f"Raw Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-print(f"Complexity-Adjusted Sharpe: {complexity_metrics['complexity_adjusted_sharpe']:.2f}")
-print(f"Overfitting Risk Score: {complexity_metrics['overfitting_penalty']:.2f}")
+print(f"Complexity-Adjusted Sharpe (experimental): {complexity_metrics['complexity_adjusted_sharpe']:.2f}")
+print(f"Overfitting Risk Score (experimental): {complexity_metrics['overfitting_penalty']:.2f}")
 ```
+
+### Contributing to Complexity Scoring
+
+We welcome improvements to the complexity scoring system! Areas for contribution include:
+
+- **🔧 Algorithm Refinements**: Better scoring formulas for existing models
+- **📦 Model Support**: Adding support for new ML libraries (LightGBM, CatBoost, etc.)
+- **🧮 Data-Dependent Scoring**: Incorporating training data characteristics
+- **📊 Validation Studies**: Empirical validation of complexity scores vs overfitting
+
+To contribute:
+1. Fork the repository
+2. Create a feature branch
+3. Improve `complexity_score.py` with tests
+4. Submit a pull request with clear documentation
 
 ### Educational Value
 

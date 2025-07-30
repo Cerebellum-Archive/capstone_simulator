@@ -35,13 +35,9 @@ def estimate_search_space_size(params):
 
 def get_complexity_score(estimator: BaseEstimator, X=None, y=None) -> float:
     """
-    EXPERIMENTAL: Computes a generic complexity score for sklearn estimators, including auto-tuning learners.
+    Computes a generic complexity score for sklearn estimators, including auto-tuning learners.
     Higher score indicates higher model complexity, correlating with higher overfitting risk,
     especially for time-series generalization.
-    
-    ⚠️ EXPERIMENTAL FEATURE: This complexity scoring system is under active development.
-    We welcome contributions to improve scoring algorithms and extend model support.
-    Please submit improvements via GitHub pull requests.
     
     - OLS (LinearRegression) is baseline 1.0.
     - Regularized linear models (e.g., Ridge) have scores <= 1.0 based on regularization strength,
@@ -60,13 +56,6 @@ def get_complexity_score(estimator: BaseEstimator, X=None, y=None) -> float:
     
     Usage: Call before or after fitting to gauge overfitting risk in the Capstone Simulator.
     Can adjust performance metrics (e.g., complexity-adjusted return = return / score).
-    
-    Contributing:
-    - Fork the repository and create a feature branch
-    - Improve scoring algorithms in this function
-    - Add support for new ML models
-    - Include unit tests for your changes
-    - Submit a pull request with clear documentation
     """
     # Check if the estimator is fitted. This is a heuristic.
     # A more robust check might involve sklearn.utils.validation.check_is_fitted
