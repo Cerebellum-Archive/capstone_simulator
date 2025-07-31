@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an **educational quantitative trading simulation framework** designed for financial engineering students. The refactored codebase emphasizes the **full research cycle** (data inputs, feature preprocessing, model exploration, simulation, and reporting) with native **xarray integration** for standardized multi-dimensional data handling.
+This is an **educational quantitative trading simulation framework** designed for financial engineering students. Updated July 2025, the refactored codebase emphasizes the **full research cycle** (data inputs, feature preprocessing, model exploration, simulation, and reporting) with native **xarray integration** for standardized multi-dimensional data handling.
+
+**Note**: This repository does NOT use quantstats. All performance analytics are built-in using custom functions.
 
 ## Refactored Repository Structure
 
@@ -43,6 +45,9 @@ jupyter notebook notebooks/01_single_target_tutorial.ipynb
 cd src/
 python3 single_target_simulator.py
 python3 multi_target_simulator.py
+
+# Run tests to ensure everything works
+pytest
 ```
 
 **Key Changes from Original:**
@@ -120,10 +125,12 @@ results_xr = xr.Dataset({
 - **Student Exercises**: Hands-on coding challenges to implement advanced techniques
 - **Blue Water Macro Context**: Professional applications and career development guidance
 
-**Performance Analysis Tools:**
+**Built-in Performance Analysis Tools (No External Dependencies):**
 - `calculate_performance_metrics()` - Comprehensive risk-adjusted metrics (Sharpe, Calmar, drawdown)
 - `create_correlation_matrix()` - Multi-strategy correlation analysis
 - `export_results_to_csv()` - Production-ready result export with metadata
+- Custom visualization functions for returns, drawdowns, and correlation heatmaps
+- All analytics implemented natively without quantstats or similar libraries
 
 ## Production Considerations
 
@@ -137,6 +144,16 @@ results_xr = xr.Dataset({
 - **Metadata Tracking**: Complete audit trail in xarray attributes
 - **Scalability**: Modular design supports additional assets and strategies
 
+## Framework Comparison Context
+
+This framework is positioned as an educational tool among other backtesting frameworks:
+
+- **vs Backtrader**: Simpler setup, educational focus, but no live trading yet
+- **vs Zipline**: More current (2025 vs outdated post-2020), better for learning
+- **vs QuantConnect LEAN**: Self-contained, classroom-friendly vs cloud-based production
+- **vs vectorbt**: Pre-configured multi-asset framework vs pure speed optimization
+- **vs Backtesting.py**: Multi-asset portfolio focus vs single-strategy simplicity
+
 ## Important Educational Notes
 
 - **Emphasis on Understanding**: Every function includes educational docstrings explaining financial concepts
@@ -144,3 +161,5 @@ results_xr = xr.Dataset({
 - **Career Development**: Framework positions students for quant finance roles
 - **Blue Water Macro Branding**: Professional context with enterprise-grade methodologies
 - **Progressive Complexity**: From basic single-target to advanced multi-asset portfolio construction
+- **Self-Contained Analytics**: All performance metrics implemented natively, no external analytics libraries required
+- **Framework Positioning**: Educational focus with production-quality code patterns
