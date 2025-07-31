@@ -142,6 +142,7 @@ Thumbs.db
 
 # Claude AI files
 .claude/
+CLAUDE.md
 
 # Project specific
 reports/
