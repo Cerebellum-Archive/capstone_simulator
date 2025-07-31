@@ -1,4 +1,4 @@
-# 2023 Update to Capstone Project - Quantitative Trading Simulation Framework
+# 2025 Update to Capstone Project - Quantitative Trading Simulation Framework
 
 <div align="center">
 
@@ -10,7 +10,7 @@
 
 </div>
 
-> **Updated quantitative trading simulation framework for backtesting strategies using Python, ideal for financial engineering education and research.**
+> **Updated July 2025: quantitative trading simulation framework for backtesting strategies using Python, ideal for financial engineering education and research.**
 
 A hands-on educational platform for **financial engineering students** to develop, backtest, and analyze trading strategies. Built with Python, xarray, and scikit-learn, this framework guides you through the **full quantitative research cycle**: data loading, feature engineering, model exploration, simulation, and reporting.
 
@@ -40,7 +40,7 @@ A hands-on educational platform for **financial engineering students** to develo
 - **xarray for Finance**: Native use of xarray for standardized, multi-dimensional reporting (e.g., results across time/assets/strategies)—a skill increasingly valued in quant roles
 - **Real-World Strategies**: Simulate single-asset (e.g., SPY) and multi-asset (e.g., SPY/QQQ/IWM) predictions with position sizing, leverage, and portfolio optimization
 - **Capstone-Ready**: Ideal for financial engineering projects—includes exercises, extensions, and resources from QuantNet/CFA
-- **Enterprise-Grade Analytics**: Leveraging Blue Water Macro's institutional insights and data science expertise
+- **Enterprise-Grade Analytics**: Comprehensive risk-adjusted metrics (Sharpe, Calmar, drawdowns, heatmaps) using built-in performance analysis tools
 
 ### Learning Objectives
 
@@ -303,8 +303,9 @@ feat_analysis = p_by_year(X_features, y_target)
 # 4. SIMULATION: Walk-forward backtesting
 results = simulate_strategy(features_smooth, targets, model='ridge')
 
-# 5. REPORTING: Generate publication-quality outputs
+# 5. REPORTING: Generate publication-quality outputs with built-in analytics
 results_xr = create_results_xarray(results)
+metrics = calculate_performance_metrics(results_xr)  # Sharpe, Calmar, drawdowns
 results_xr.plot.line(x='time', col='strategy', col_wrap=2)
 ```
 
@@ -723,6 +724,34 @@ Based on historical backtests using Blue Water Macro's methodology (2015-2024):
 | **Equal Weight** | 0.8 - 1.2 | 15-25% | Conservative, diversified |
 | **Confidence Weighted** | 1.0 - 1.8 | 20-35% | Moderate risk, adaptive |
 | **Long-Short** | 1.2 - 2.5 | 10-20% | Market-neutral strategies |
+
+## Framework Comparison
+
+| Framework | Backtesting Type | Asset Support | Live Trading | Analytics | Ease of Use | Performance | Community | Best Use Case |
+|-----------|------------------|---------------|--------------|-----------|-------------|-------------|-----------|---------------|
+| **Capstone Simulator** | Walk-forward, multi-target | ETFs (stocks) | No | Built-in (Sharpe, drawdowns, heatmaps) | High (Colab, pre-built scripts) | Cached, medium-scale | None (single-author) | Education, research |
+| **Backtrader** | Event-driven | Stocks, forex, futures | Yes (e.g., IB, Oanda) | Built-in (Sharpe, drawdown) | Moderate (complex setup) | Daily data, no caching | Large, active | Production, research |
+| **Zipline** | Event-driven | Equities, futures | No | Basic metrics | Low (outdated docs) | Large datasets, slow | Declining | Research |
+| **PyAlgoTrade** | Event-driven | Stocks, Bitcoin | Yes (Bitstamp) | TA-Lib, basic metrics | Moderate (no Pandas) | Small datasets | Small, active | Research, niche trading |
+| **Backtesting.py** | Vectorized | Any candlestick data | No | Interactive charts (Bokeh) | High (simple API) | Very fast | Small, active | Education, research |
+| **QuantConnect LEAN** | Event-driven | Multi-asset (stocks, forex, crypto, options) | Yes (multiple brokers) | Extensive metrics | Moderate (cloud IDE) | Scalable, cloud-based | Very large | Production, research |
+| **vectorbt** | Vectorized | Any candlestick data | No | Custom metrics | High (Pandas-based) | Very fast | Growing | Research |
+
+### Notes on Comparison
+
+**Capstone Simulator**: Excels in education with walk-forward backtesting and multi-target ETF predictions (SPY, QQQ, IWM). Built-in analytics provide modern performance analysis, but lacks live trading and community support compared to Backtrader or LEAN.
+
+**Backtrader**: Mature, with live trading and broad asset support, but its complex setup contrasts with Capstone's beginner-friendly scripts.
+
+**Zipline**: Robust for historical research but outdated (post-2020), making Capstone's 2025 update and Colab support more appealing.
+
+**PyAlgoTrade**: Offers niche features (e.g., Twitter events), but Capstone's sklearn pipelines and analytics are more advanced.
+
+**Backtesting.py**: Faster and simpler for single strategies, but Capstone's multi-asset focus and production-ready caching are stronger for research.
+
+**QuantConnect LEAN**: Industry leader for production with cloud scalability, but Capstone's self-contained design suits classroom use better.
+
+**vectorbt**: Outperforms in speed for large-scale research, but Capstone's pre-configured multi-target framework is more comprehensive for portfolio strategies.
 
 ## Educational Resources
 
