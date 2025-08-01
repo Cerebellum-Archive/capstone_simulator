@@ -1,14 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Multi-Target Quantitative Trading Simulation Framework
+Multi-Target Quantitative Trading Simulation Framework - Streamlined Core
 
 Purpose:
-This script provides a framework for backtesting quantitative trading strategies
-using multi-target regression. It leverages sklearn's multi-target capabilities
-to predict returns for multiple ETFs simultaneously, enabling more sophisticated
-portfolio construction and risk management.
-
-NEW: Optionally enhanced with riskmodels.net integration for institutional-grade risk analysis.
+This streamlined version focuses on the essential simulation logic flow, with
+utility functions moved to multi_target_utils.py for better organization.
 
 Core Simulation Flow:
 1. Data Loading and Preparation
@@ -17,30 +13,23 @@ Core Simulation Flow:
 4. Portfolio Construction
 5. Performance Analysis
 
+NEW: Optionally enhanced with riskmodels.net integration for institutional-grade risk analysis.
+
 How to Use:
 1. Configure target ETFs and features in the main() function
 2. Choose multi-target compatible estimators (most sklearn regressors work)
 3. Run the script to get portfolio strategies based on multi-target predictions
 4. OPTIONAL: Configure riskmodels.net API key for enhanced institutional-grade risk analysis
-
-Note: Most utility functions have been moved to multi_target_utils.py for better organization.
 """
 
 import os
-import sys
 from datetime import datetime
 import numpy as np
 import pandas as pd
-import xarray as xr
-import matplotlib.pyplot as plt
 from typing import List, Tuple, Any, Dict, Optional
-import logging
 
-# Scikit-learn imports
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error as rmse, mean_absolute_error as mae, r2_score
-from sklearn.linear_model import LinearRegression, Ridge, HuberRegressor, ElasticNet
+# Scikit-learn imports for modeling
+from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.multioutput import MultiOutputRegressor
 
@@ -51,7 +40,8 @@ try:
     setup_logging, SimulationConfig, BenchmarkConfig, format_benchmark_name,
     
     # Data caching and storage
-    download_etf_data_with_cache, clean_yfinance_cache, list_yfinance_cache,
+    download_etf_data_with_cache, save_yfinance_data_to_zarr, 
+    load_yfinance_data_from_zarr, clean_yfinance_cache, list_yfinance_cache,
     
     # Simulation metadata and hashing
     generate_simulation_metadata, generate_simulation_hash,
@@ -77,7 +67,8 @@ except ImportError:
         setup_logging, SimulationConfig, BenchmarkConfig, format_benchmark_name,
         
         # Data caching and storage
-        download_etf_data_with_cache, clean_yfinance_cache, list_yfinance_cache,
+        download_etf_data_with_cache, save_yfinance_data_to_zarr, 
+        load_yfinance_data_from_zarr, clean_yfinance_cache, list_yfinance_cache,
         
         # Simulation metadata and hashing
         generate_simulation_metadata, generate_simulation_hash,
@@ -754,7 +745,7 @@ def main():
             axes[0,0].legend()
             axes[0,0].grid(True, alpha=0.3)
             
-            # 2. Rolling Sharpe Ratio (60-day)
+            # 2. Rolling Sharpe Ratio (30-day)
             rolling_sharpe_std = aligned_standard.rolling(30).mean() / aligned_standard.rolling(30).std() * np.sqrt(252)
             
             axes[0,1].plot(dates, rolling_sharpe_std, label='Standard', alpha=0.8)
