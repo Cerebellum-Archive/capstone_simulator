@@ -37,6 +37,46 @@ from statsmodels.regression.linear_model import OLS
 from scipy.stats import randint, uniform, loguniform
 from typing import Dict, List, Optional, Union, Tuple
 
+try:
+    from xgboost import XGBRegressor
+    XGBOOST_AVAILABLE = True
+except Exception:
+    XGBOOST_AVAILABLE = False
+
+class XGBoostRegressorWrapper(BaseEstimator, RegressorMixin):
+    """
+    Sklearn-compatible wrapper for XGBoost Regressor providing a minimal API
+    for use inside sklearn Pipelines.
+
+    Parameters map directly to xgboost.XGBRegressor when available.
+    """
+
+    def __init__(self, **xgb_params):
+        self.xgb_params = xgb_params
+        self._model = None
+
+    def fit(self, X: pd.DataFrame, y: Union[pd.Series, np.ndarray]):
+        if not XGBOOST_AVAILABLE:
+            raise ImportError("xgboost not installed. Install with `pip install xgboost`." )
+        params = {**self.xgb_params}
+        # Ensure a deterministic setting unless overridden
+        params.setdefault('random_state', 42)
+        self._model = XGBRegressor(**params)
+        self._model.fit(X, y)
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if self._model is None:
+            raise RuntimeError("Model not fitted")
+        return self._model.predict(X)
+
+    def get_params(self, deep: bool = True):
+        return {**self.xgb_params}
+
+    def set_params(self, **params):
+        self.xgb_params.update(params)
+        return self
+
 
 def simplify_teos(df: pd.DataFrame) -> pd.DataFrame:
     """
