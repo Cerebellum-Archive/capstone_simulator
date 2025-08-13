@@ -923,12 +923,31 @@ def load_and_prepare_data(etf_list, target_etf, start_date=None):
     if isinstance(raw, dict):
         close_df = raw.get('Close')
     else:
-        # Handle MultiIndex columns from yfinance (ticker, field)
+        # Handle various yfinance return shapes robustly
         if isinstance(raw.columns, pd.MultiIndex):
-            close_df = raw.xs('Close', level=1, axis=1)
+            close_df = None
+            # Try to locate 'Close' on any level
+            for lvl in range(raw.columns.nlevels):
+                try:
+                    if 'Close' in raw.columns.get_level_values(lvl):
+                        candidate = raw.xs('Close', level=lvl, axis=1)
+                        close_df = candidate
+                        break
+                except Exception:
+                    pass
+            if close_df is None:
+                # Fallback: if only one ticker, flatten
+                try:
+                    close_df = raw.droplevel(list(range(raw.columns.nlevels-1)), axis=1)
+                except Exception:
+                    close_df = raw.copy()
         else:
-            # If only a single series is returned
-            close_df = raw
+            # Single-level columns: expect a 'Close' column if single ticker
+            if 'Close' in raw.columns:
+                close_df = raw[['Close']].copy()
+            else:
+                # If it's already prices (e.g., only one series), use as-is
+                close_df = raw.copy()
     
     etf_log_returns_df = log_returns(close_df).dropna()
 
@@ -983,7 +1002,7 @@ def main():
     try:
         # --- Data Loading ---
         logger.info("Loading and preparing data...")
-        X, y = load_and_prepare_data(
+        X, y, _all_returns = load_and_prepare_data(
             config["feature_etfs"], 
             config["target_etf"], 
             config["start_date"]

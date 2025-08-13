@@ -681,7 +681,7 @@ def main():
     
     # NEW: riskmodels.net configuration
     RISKMODELS_API_KEY = os.getenv('RISKMODELS_API_KEY', 'demo_key_for_education')
-    ENABLE_RISK_MODELS = True
+    ENABLE_RISK_MODELS = False
     
     print(f"Target ETFs: {TARGET_ETFS}")
     print(f"Feature ETFs: {len(FEATURE_ETFS)} sector ETFs")

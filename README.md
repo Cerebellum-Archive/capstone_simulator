@@ -36,11 +36,11 @@ A hands-on educational platform for **financial engineering students** to develo
 ## Why This Framework?
 
 - **Educational Focus**: Step-by-step tutorials teach core concepts like time-series cross-validation, multi-dimensional data handling with xarray, and risk-adjusted performance metrics
-- **Full Research Cycle**: From raw data inputs to publication-quality reports—learn how quants at hedge funds structure their workflow
+- **Full Research Cycle**: From raw data inputs to publication-quality reports—learn a practical, production-inspired research workflow
 - **xarray for Finance**: Native use of xarray for standardized, multi-dimensional reporting (e.g., results across time/assets/strategies)—a skill increasingly valued in quant roles
 - **Real-World Strategies**: Simulate single-asset (e.g., SPY) and multi-asset (e.g., SPY/QQQ/IWM) predictions with position sizing, leverage, and portfolio optimization
 - **Capstone-Ready**: Ideal for financial engineering projects—includes exercises, extensions, and resources from QuantNet/CFA
-- **Enterprise-Grade Analytics**: Comprehensive risk-adjusted metrics (Sharpe, Calmar, drawdowns, heatmaps) using built-in performance analysis tools
+- **Comprehensive Analytics**: Risk-adjusted metrics (Sharpe, Calmar, drawdowns, heatmaps) using built-in performance analysis tools
 
 ### Learning Objectives
 
@@ -51,7 +51,7 @@ By completing this framework, students will:
 3. **Build ML pipelines** for feature preprocessing and learner exploration
 4. **Generate professional graphs and reports** for strategy evaluation
 5. **Understand portfolio construction** and risk management principles
-6. **Apply quantitative methods** used in institutional settings
+6. **Apply quantitative methods** in time-series settings
 
 ## Quick Start
 
@@ -88,6 +88,10 @@ jupyter notebook notebooks/01_single_target_tutorial.ipynb
 # Optional: Generate offline PDF tutorial
 python scripts/generate_pdf_simple.py
 ```
+
+Notes:
+- Optional components: Streamlit app (`streamlit`), XGBoost (`xgboost`), and PDF generation (`weasyprint`) may require additional system dependencies. Install them only if you need those features.
+- Default risk model features are disabled; set `ENABLE_RISK_MODELS=True` in `src/multi_target_simulator.py` or provide `RISKMODELS_API_KEY` to enable.
 
 ### Using the Package in Your Code
 ```python
@@ -215,9 +219,9 @@ quant_trading_simulator/
 - **Tutorial 3**: Complete research cycle demonstration with exercises
 
 ### Documentation (`docs/`)
-- **📖 Complete PDF Tutorial**: Professional offline guide (`Blue_Water_Macro_Tutorial.pdf`)
-- **🌐 Interactive HTML Tutorial**: Browser-based tutorial with print-to-PDF capability
-- **Data Dictionary**: Blue Water Macro's ERM3 model documentation
+- **Parameter Sweeps & xarray**: `docs/Parameter_Sweeps_and_Xarray.md`
+- **Medium Draft (Rolling Simulations)**: `docs/Medium_Rolling_Simulations_Article.md`
+- **Interactive HTML Tutorial**: `docs/Blue_Water_Macro_Tutorial.html`
 - **Implementation Guides**: Best practices and advanced techniques
 
 ## 🧠 Model Complexity Scoring & Overfitting Detection (Experimental)
