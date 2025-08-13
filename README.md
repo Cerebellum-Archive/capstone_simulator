@@ -16,7 +16,7 @@ A hands-on educational platform for **financial engineering students** to develo
 
 **Developed by Conrad Gann for Blue Water Macro Corp. © 2025**
 
-## 📋 Table of Contents
+## Table of Contents
 - [Why This Framework?](#why-this-framework)
 - [Learning Objectives](#learning-objectives)
 - [Quick Start](#quick-start)
@@ -113,7 +113,7 @@ data = cs.utils_simulate.download_etf_data(['SPY', 'QQQ'])
 results = cs.single_target_simulator.run_simulation(data)
 ```
 
-## 🚀 Quick Wins - Copy & Paste Examples
+## Quick Wins - Copy & Paste Examples
 
 ### Add a New ETF to Your Strategy
 ```python
@@ -224,7 +224,7 @@ quant_trading_simulator/
 - **Interactive HTML Tutorial**: `docs/Blue_Water_Macro_Tutorial.html`
 - **Implementation Guides**: Best practices and advanced techniques
 
-## 🧠 Model Complexity Scoring & Overfitting Detection (Experimental)
+## Model Complexity Scoring & Overfitting Detection (Experimental)
 
 The framework includes **experimental model complexity analysis** to help identify and mitigate overfitting risks—a critical concern in quantitative finance where complex models may capture noise rather than genuine market signals.
 
@@ -232,10 +232,10 @@ The framework includes **experimental model complexity analysis** to help identi
 
 ### Key Features
 
-- **🎯 Automated Complexity Scoring**: Each model receives a complexity score based on its architecture and hyperparameters
-- **📊 Complexity-Adjusted Metrics**: Performance metrics adjusted for model complexity to identify truly robust strategies
-- **⚖️ Overfitting Risk Assessment**: Early warning system for models that may not generalize well
-- **🔍 Meta-Analysis Tools**: Compare strategies with similar complexity scores for fair evaluation
+- **Automated Complexity Scoring**: Each model receives a complexity score based on its architecture and hyperparameters
+- **Complexity-Adjusted Metrics**: Performance metrics adjusted for model complexity to identify truly robust strategies
+- **Overfitting Risk Assessment**: Early warning system for models that may not generalize well
+- **Meta-Analysis Tools**: Compare strategies with similar complexity scores for fair evaluation
 
 ### Complexity Score Examples (Experimental)
 
@@ -266,10 +266,10 @@ print(f"Overfitting Risk Score (experimental): {complexity_metrics['overfitting_
 
 We welcome improvements to the complexity scoring system! Areas for contribution include:
 
-- **🔧 Algorithm Refinements**: Better scoring formulas for existing models
-- **📦 Model Support**: Adding support for new ML libraries (LightGBM, CatBoost, etc.)
-- **🧮 Data-Dependent Scoring**: Incorporating training data characteristics
-- **📊 Validation Studies**: Empirical validation of complexity scores vs overfitting
+- **Algorithm Refinements**: Better scoring formulas for existing models
+- **Model Support**: Adding support for new ML libraries (LightGBM, CatBoost, etc.)
+- **Data-Dependent Scoring**: Incorporating training data characteristics
+- **Validation Studies**: Empirical validation of complexity scores vs overfitting
 
 To contribute:
 1. Fork the repository
@@ -281,10 +281,10 @@ To contribute:
 
 Understanding model complexity teaches crucial quantitative finance concepts:
 
-- **🎓 Bias-Variance Trade-off**: Balance between model flexibility and generalization
-- **🔬 Out-of-Sample Robustness**: Why simpler models often perform better in production
-- **📈 Production Deployment**: How complexity affects real-world trading performance
-- **⚡ Risk Management**: Early detection of potentially unreliable signals
+- **Bias-Variance Trade-off**: Balance between model flexibility and generalization
+- **Out-of-Sample Robustness**: Why simpler models often perform better in production
+- **Production Deployment**: How complexity affects real-world trading performance
+- **Risk Management**: Early detection of potentially unreliable signals
 
 The complexity scoring system integrates seamlessly with the framework's metadata system, automatically calculating scores based on simulation configurations stored in the reproducible hash system.
 
@@ -315,7 +315,7 @@ results_xr.plot.line(x='time', col='strategy', col_wrap=2)
 
 See `notebooks/03_full_research_cycle.ipynb` for a complete implementation.
 
-## 🕐 Tutorial: Hash-Based Future Testing
+## Tutorial: Hash-Based Future Testing
 
 This tutorial demonstrates the **killer feature** of the framework: running your exact historical strategy on future data to test true out-of-sample performance.
 
@@ -451,7 +451,7 @@ cleanup_old_hashes(older_than_days=90)
 
 This workflow represents **production-quality strategy validation** - the same process used by professional investment firms to distinguish genuine alpha from statistical noise.
 
-## 📖 Offline PDF Tutorial
+## Offline PDF Tutorial
 
 For comprehensive offline study, we provide multiple options:
 
@@ -470,18 +470,18 @@ python scripts/generate_html_tutorial.py
 ```
 
 **What's included:**
-- ✅ **Complete Framework Guide**: All concepts from basic to advanced
-- ✅ **Professional Styling**: Blue Water Macro corporate design
-- ✅ **Code Examples**: Syntax-highlighted Python with copy buttons  
-- ✅ **Career Guidance**: Pathways to quantitative finance roles
-- ✅ **Mathematical Foundations**: Formulas and derivations
-- ✅ **Offline Access**: No internet required once generated
+- Complete Framework Guide: All concepts from basic to advanced
+- Professional Styling: Blue Water Macro corporate design
+- Code Examples: Syntax-highlighted Python with copy buttons  
+- Career Guidance: Pathways to quantitative finance roles
+- Mathematical Foundations: Formulas and derivations
+- Offline Access: No internet required once generated
 
 **Perfect for:**
-- 📚 **Student Study Materials**: Comprehensive reference guide
-- 💼 **Career Portfolios**: Demonstrate quantitative expertise
-- 🎓 **Academic Courses**: Ready-to-use educational content
-- 📋 **Quick Reference**: Formulas and code templates
+- Student Study Materials: Comprehensive reference guide
+- Career Portfolios: Demonstrate quantitative expertise
+- Academic Courses: Ready-to-use educational content
+- Quick Reference: Formulas and code templates
 
 ## Student Exercises & Capstone Ideas
 
@@ -497,7 +497,7 @@ python scripts/generate_html_tutorial.py
 4. **Alternative Data**: Integrate sentiment analysis or economic indicators
 5. **Portfolio Optimization**: Apply Modern Portfolio Theory for asset allocation
 
-## 💾 Modern Hash Storage & Out-of-Sample Testing
+## Modern Hash Storage & Out-of-Sample Testing
 
 The framework uses **xarray.zarr format** for intelligent caching and complete reproducibility. Every simulation generates a unique hash based on all parameters (data sources, model configuration, training windows, etc.) and stores both results and complete metadata for future reconstruction.
 
@@ -587,13 +587,13 @@ strategies_by_date = {
 
 This approach mirrors **hedge fund practices** where strategies must prove robustness across time periods:
 
-- **🎯 Overfitting Detection**: Compare in-sample vs out-of-sample performance
-- **📊 Strategy Decay Analysis**: Track how performance changes over time
+- **Overfitting Detection**: Compare in-sample vs out-of-sample performance
+- **Strategy Decay Analysis**: Track how performance changes over time
 - **🔄 Reproducible Research**: Share exact configurations with colleagues
 - **Regulatory Compliance**: Auditable workflow suitable for production environments
-- **📈 Production Deployment**: Test strategies before live trading
+- **Production Deployment**: Test strategies before live trading
 
-## 🌐 Intelligent yfinance Caching System
+## Intelligent yfinance Caching System
 
 The framework includes a comprehensive **yfinance caching system** using zarr format to eliminate API rate limiting issues during development and research. This system automatically caches all ETF downloads, dramatically improving workflow efficiency.
 
@@ -615,13 +615,13 @@ data = download_etf_data_with_cache(
 
 ### Cache Benefits & Features
 
-**🚀 Performance Improvements:**
+**Performance Improvements:**
 - **Instant Re-runs**: Cached data loads in milliseconds vs minutes for downloads
 - **API Limit Protection**: Eliminates "ETF not found, using zeros" warnings
 - **Offline Development**: Work without internet once data is cached
 - **Batch Processing**: Run multiple simulations without API restrictions
 
-**💾 Smart Storage:**
+**Smart Storage:**
 ```python
 # Cache files stored in: cache/yfinance_data/
 # Example: yf_SPY_QQQ_IWM_2020-01-01_2025-07-29.zarr
@@ -637,7 +637,7 @@ list_yfinance_cache()
 clean_yfinance_cache(max_age_days=7)  # Remove files older than 7 days
 ```
 
-**🔧 Technical Architecture:**
+**Technical Architecture:**
 - **Multi-Ticker Support**: Handles both single and multi-asset downloads seamlessly
 - **Column Structure Preservation**: Maintains proper yfinance MultiIndex format
 - **Metadata Tracking**: Stores download timestamps, ticker lists, date ranges
@@ -666,7 +666,7 @@ results = Simulate_MultiTarget(
 
 ### Real-World Workflow Benefits
 
-**🎓 Educational Use Cases:**
+**Educational Use Cases:**
 ```python
 # Students can experiment freely without API limits
 for window_size in [200, 400, 600]:
@@ -675,7 +675,7 @@ for window_size in [200, 400, 600]:
         # Each run reuses cached data - no download delays!
 ```
 
-**🏛️ Research Applications:**
+**Research Applications:**
 ```python
 # Researchers can iterate rapidly on strategy development
 # Cache eliminates the "download bottleneck" in quantitative research
@@ -685,13 +685,13 @@ for strategy_config in strategy_grid:
     results_list.append(results)
 ```
 
-**⚡ Production Benefits:**
+**Production Benefits:**
 - **Consistent Data**: Same cached dataset ensures reproducible results
 - **Fast Prototyping**: Rapid strategy iteration without download delays  
 - **Offline Capability**: Continue working during network outages
 - **Cost Efficiency**: Reduces API usage for data vendor subscriptions
 
-## 🔬 Benefits of Enhanced Reproducibility
+## Benefits of Enhanced Reproducibility
 
 The expanded metadata hashing in the Capstone Simulator Framework ensures full reproducibility by storing all key parameters, such as data sources, training configurations, model pipelines, and simulation details. This structured approach, combined with the framework's comprehensive caching and metadata tracking, delivers significant benefits for quantitative trading research, particularly in addressing overfitting risks and fostering reliable alpha discovery.
 
@@ -770,7 +770,7 @@ Based on historical backtests using Blue Water Macro's methodology (2015-2024):
 - **Industry Applications**: Portfolio management, risk analytics, algorithmic trading
 - **Career Paths**: Quantitative researcher, portfolio manager, risk analyst
 
-## 🧪 Running Tests
+## Running Tests
 
 The framework includes comprehensive unit tests to ensure reliability and correctness of quantitative trading simulations. Tests cover core utilities, simulation engines, caching, and educational functions.
 
@@ -813,7 +813,7 @@ The test suite serves as:
 - **Regression Prevention**: Ensures changes don't break existing functionality
 - **Learning Tool**: Students can study tests to understand expected behaviors
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Common Installation Issues
 ```bash
@@ -858,18 +858,18 @@ This educational framework is provided for learning purposes. Past performance d
 
 This project is licensed under the **Blue Water Macro Educational License (BWMEL)** - see the [LICENSE](LICENSE) file for complete terms.
 
-### 📚 **Educational Use**
-- ✅ **Free for students and educators** at accredited institutions
-- ✅ **Research and academic publication** permitted with attribution
-- ✅ **Capstone projects and dissertations** encouraged
-- ✅ **Modifications for educational purposes** allowed
+### Educational Use
+- Free for students and educators at accredited institutions
+- Research and academic publication permitted with attribution
+- Capstone projects and dissertations encouraged
+- Modifications for educational purposes allowed
 
-### 🏢 **Commercial Use**
+### Commercial Use
 - 📧 **Commercial licensing available** - contact licensing@bluewatermacro.com
 - 🤝 **Partnerships welcome** for organizational adoption
-- 💼 **Career opportunities** for exceptional student contributors
+- Career opportunities for exceptional student contributors
 
-### ⚖️ **Key Requirements**
+### Key Requirements
 - **Attribution**: Must credit "Blue Water Macro Quantitative Trading Framework"
 - **Educational Focus**: Commercial use requires separate license
 - **Share-Alike**: Educational improvements should benefit the community
