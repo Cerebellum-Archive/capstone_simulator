@@ -284,7 +284,7 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ## Thank You!
 
-Thank you for contributing to quantitative finance education! Your efforts help students worldwide develop the skills needed for successful careers in institutional asset management and quantitative research.
+Thank you for contributing to quantitative finance education! Your efforts help students worldwide develop the skills needed for successful careers in professional asset management and quantitative research.
 
 **Together, we're building the next generation of quantitative finance professionals.**
 

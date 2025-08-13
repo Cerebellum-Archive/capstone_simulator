@@ -15,14 +15,14 @@ A hands-on educational platform for **financial engineering students** to develo
 ## Why This Framework?
 
 - **Educational Focus**: Step-by-step tutorials teach core concepts like time-series cross-validation, multi-dimensional data handling with xarray, and risk-adjusted performance metrics
-- **Full Research Cycle**: From raw data inputs to publication-quality PDF reports—learn how quants at hedge funds structure their workflow
+- **Full Research Cycle**: From raw data inputs to publication-quality PDF reports—learn a practitioner-focused research workflow
 - **Professional Benchmarking**: Built-in benchmark framework comparing strategies against buy-and-hold, zero-return, and custom benchmarks with information ratios and excess returns
 - **xarray for Finance**: Native use of xarray for standardized, multi-dimensional reporting (e.g., results across time/assets/strategies)—a skill increasingly valued in quant roles
 - **Real-World Strategies**: Simulate single-asset (e.g., SPY) and multi-asset (e.g., SPY/QQQ/IWM) predictions with position sizing, leverage, and portfolio optimization
 - **Extended Data Coverage**: Now supports 15+ years of historical data (2010-present) for robust backtesting
 - **Publication-Quality Output**: Professional tear sheets, performance summaries, and benchmark analysis in PDF/PNG formats
 - **Capstone-Ready**: Ideal for financial engineering projects—includes exercises, extensions, and resources from QuantNet/CFA
-- **Enterprise-Grade Analytics**: Leveraging Blue Water Macro's institutional insights and data science expertise
+- **Comprehensive Analytics**: Leveraging Blue Water Macro's research insights and data science expertise
 
 ### Learning Objectives
 
@@ -31,15 +31,15 @@ By completing this framework, students will:
 1. **Master time-series simulation** to avoid common pitfalls like look-ahead bias
 2. **Use xarray for efficient data organization** and visualization in finance
 3. **Build ML pipelines** for feature preprocessing and learner exploration
-4. **Learn institutional benchmarking practices** - the foundation of professional quant analysis:
+4. **Learn professional benchmarking practices** - the foundation of practitioner quant analysis:
    - Calculate information ratios and excess returns vs standard benchmarks
    - Understand buy-and-hold vs zero-return baseline comparisons
-   - Apply benchmark selection methodology used at hedge funds
-   - Interpret risk-adjusted performance metrics in institutional context
+   - Apply benchmark selection methodology used in professional research
+   - Interpret risk-adjusted performance metrics in production context
 5. **Generate publication-quality reports** with PDF tear sheets and performance analysis
 6. **Understand portfolio construction** and risk management principles
 7. **Configure advanced simulations** with flexible parameter management
-8. **Apply quantitative methods** used in institutional settings
+8. **Apply quantitative methods** in time-series settings
 
 ## Quick Start
 
@@ -302,7 +302,7 @@ Based on historical backtests using Blue Water Macro's methodology (2015-2024):
 - **xarray Documentation**: [xarray.pydata.org](https://xarray.pydata.org/en/stable/examples/finance.html) - Financial data handling
 
 ### Professional Development
-- **Blue Water Macro**: Enterprise-grade data and analytics for institutional research
+- **Blue Water Macro**: Professional data and analytics for research
 - **Industry Applications**: Portfolio management, risk analytics, algorithmic trading
 - **Career Paths**: Quantitative researcher, portfolio manager, risk analyst
 
@@ -334,7 +334,7 @@ This project is licensed under the **Blue Water Macro Educational License (BWMEL
 
 ### 🏢 **Commercial Use**
 - 📧 **Commercial licensing available** - contact licensing@bluewatermacro.com
-- 🤝 **Enterprise partnerships welcome** for institutional adoption
+- 🤝 **Partnerships welcome** for organizational adoption
 - 💼 **Career opportunities** for exceptional student contributors
 
 ### ⚖️ **Key Requirements**
@@ -345,6 +345,6 @@ This project is licensed under the **Blue Water Macro Educational License (BWMEL
 
 ---
 
-**Build your quantitative finance career with enterprise-grade tools and institutional insights.**
+**Build your quantitative finance career with production-quality tools and practitioner insights.**
 
 *Leveraging Blue Water Macro's ERM3 model for comprehensive market analysis and strategy development.*

@@ -3,7 +3,7 @@
 
 ![Blue Water Macro Logo](transparent-logo.png)
 
-**A Comprehensive Guide to Institutional-Grade Quantitative Finance**
+**A Comprehensive Guide to Professional Quantitative Finance**
 
 *Developed by Conrad Gann for Blue Water Macro Corp.*
 *© 2025 Blue Water Macro Corp. All Rights Reserved*
@@ -27,7 +27,7 @@
 
 ## Introduction
 
-### Welcome to Institutional Quantitative Finance
+### Welcome to Professional Quantitative Finance
 
 This tutorial provides a comprehensive introduction to quantitative trading strategies using the Blue Water Macro educational framework. Designed specifically for financial engineering students, this guide takes you through the complete research cycle used by professional quantitative analysts at hedge funds and investment banks.
 
@@ -38,7 +38,7 @@ By completing this tutorial, you will:
 1. **Master Time-Series Analysis**: Understand walk-forward backtesting and avoid look-ahead bias
 2. **Apply Machine Learning to Finance**: Use sklearn pipelines for feature engineering and model selection
 3. **Handle Multi-Dimensional Data**: Leverage xarray for professional-grade data analysis
-4. **Master Institutional Benchmarking** - The cornerstone of professional quantitative analysis:
+4. **Master Professional Benchmarking** - The cornerstone of practitioner quantitative analysis:
    - **Learn why benchmarking matters**: Understanding that raw returns mean nothing without context
    - **Calculate information ratios**: The industry-standard metric for risk-adjusted outperformance
    - **Compare benchmark methodologies**: When to use buy-and-hold vs zero-return vs custom benchmarks
@@ -50,10 +50,10 @@ By completing this tutorial, you will:
 
 ### Why Blue Water Macro?
 
-Blue Water Macro Corp. brings institutional-grade methodologies to educational settings. Our framework incorporates:
+Blue Water Macro Corp. brings production-quality methodologies to educational settings. Our framework incorporates:
 
 - **Enterprise-Grade Analytics**: Tools used by professional quantitative researchers
-- **Professional Benchmarking**: Institutional-standard performance attribution and comparison
+- **Professional Benchmarking**: Practitioner-standard performance attribution and comparison
 - **Extended Data Coverage**: 15+ years of historical data for robust backtesting (2010-present)
 - **Publication-Quality Output**: PDF tear sheets and professional visualization
 - **Real-World Applications**: Strategies applicable to actual trading environments
@@ -196,7 +196,7 @@ results = simulate_single_target_strategy(X_features, y_target)
 ```python
 from src.single_target_simulator import SingleTargetBenchmarkManager, SingleTargetBenchmarkConfig
 
-# Setup institutional benchmarking
+# Setup professional benchmarking
 benchmark_config = SingleTargetBenchmarkConfig()
 benchmark_manager = SingleTargetBenchmarkManager(
     target_etf='SPY',
@@ -235,7 +235,7 @@ Students should achieve:
 - **Understanding** of backtesting methodology
 - **Practical experience** with sklearn pipelines  
 - **Insight** into feature stability analysis
-- **Mastery** of institutional benchmarking practices:
+- **Mastery** of professional benchmarking practices:
   - Calculate and interpret information ratios for your SPY strategy
   - Understand when buy-and-hold benchmark shows your strategy adds value vs when it doesn't
   - Learn why a 15% annual return might be poor performance (if buy-and-hold SPY returned 18%)
@@ -246,7 +246,7 @@ Students should achieve:
 ## Tutorial 2: Multi-Target Portfolio Strategies
 
 ### Objective
-Advance to institutional-level multi-asset prediction and portfolio construction.
+Advance to portfolio-level multi-asset prediction and portfolio construction.
 
 ### Key Innovations
 
@@ -397,7 +397,7 @@ Professional quantitative trading requires comprehensive risk controls:
 #### Position Limits
 ```python
 def apply_position_limits(positions, max_leverage=2.0, max_concentration=0.3):
-    """Apply institutional risk limits"""
+    """Apply portfolio risk limits"""
     # Total leverage limit
     total_leverage = np.abs(positions).sum()
     if total_leverage > max_leverage:
@@ -498,7 +498,7 @@ Through this framework, students develop:
 ### Blue Water Macro Opportunities
 
 Students demonstrating exceptional work may be considered for:
-- **Summer Internships**: Hands-on experience with institutional strategies
+- **Summer Internships**: Hands-on experience with practitioner strategies
 - **Full-Time Positions**: Direct entry into quantitative research roles
 - **Mentorship Programs**: Ongoing guidance from industry professionals
 - **Research Collaboration**: Co-authoring academic papers and industry research
@@ -687,7 +687,7 @@ Quantitative finance is a rapidly evolving field that combines mathematical rigo
 
 The Blue Water Macro framework provides the foundation—your curiosity, dedication, and creativity will determine how far you go.
 
-**Welcome to the world of institutional quantitative finance.**
+**Welcome to the world of professional quantitative finance.**
 
 ---
 

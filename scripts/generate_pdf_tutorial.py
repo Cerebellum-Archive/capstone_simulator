@@ -306,7 +306,7 @@ def generate_pdf_tutorial():
     <div class="title-page">
         <h1>Blue Water Macro<br>Quantitative Trading Framework</h1>
         <p class="subtitle">Complete Educational Tutorial</p>
-        <p class="subtitle">Institutional-Grade Quantitative Finance for Students</p>
+        <p class="subtitle">Professional Quantitative Finance for Students</p>
         <p class="author">Developed by Conrad Gann<br>Blue Water Macro Corp.</p>
         <p class="author">© 2025 Blue Water Macro Corp.<br>All Rights Reserved</p>
         <p class="author">Generated: {datetime.now().strftime('%B %d, %Y')}</p>
