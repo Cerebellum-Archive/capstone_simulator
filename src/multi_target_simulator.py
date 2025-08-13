@@ -8,7 +8,7 @@ using multi-target regression. It leverages sklearn's multi-target capabilities
 to predict returns for multiple ETFs simultaneously, enabling more sophisticated
 portfolio construction and risk management.
 
-NEW: Optionally enhanced with riskmodels.net integration for institutional-grade risk analysis.
+NEW: Optionally enhanced with riskmodels.net integration for advanced risk analysis.
 
 Core Simulation Flow:
 1. Data Loading and Preparation
@@ -21,7 +21,7 @@ How to Use:
 1. Configure target ETFs and features in the main() function
 2. Choose multi-target compatible estimators (most sklearn regressors work)
 3. Run the script to get portfolio strategies based on multi-target predictions
-4. OPTIONAL: Configure riskmodels.net API key for enhanced institutional-grade risk analysis
+4. OPTIONAL: Configure riskmodels.net API key for enhanced risk analysis
 
 Note: Most utility functions have been moved to multi_target_utils.py for better organization.
 """
@@ -64,6 +64,9 @@ try:
     # Position sizing functions
     L_func_multi_target_equal_weight_long_only, L_func_multi_target_equal_weight, 
     L_func_multi_target_confidence_weighted, L_func_multi_target_long_short,
+    # Position sizer classes and helpers
+    EqualWeight, ConfidenceWeighted, LongShort,
+    calculate_individual_position_weights, _determine_strategy_type,
     
     # Performance metrics
     calculate_performance_metrics, calculate_information_ratio,
@@ -90,6 +93,9 @@ except ImportError:
         # Position sizing functions
         L_func_multi_target_equal_weight_long_only, L_func_multi_target_equal_weight, 
         L_func_multi_target_confidence_weighted, L_func_multi_target_long_short,
+        # Position sizer classes and helpers
+        EqualWeight, ConfidenceWeighted, LongShort,
+        calculate_individual_position_weights, _determine_strategy_type,
         
         # Performance metrics
         calculate_performance_metrics, calculate_information_ratio,
@@ -346,9 +352,15 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     
     target_cols = list(y_multi.columns)
     
+    # Default position function to equal-weight long-only if not provided
+    if position_func is None:
+        position_func = L_func_multi_target_equal_weight_long_only
+    if position_params is None:
+        position_params = []
+
     # Generate unique simulation hash for caching
-    simulation_hash = generate_simulation_hash(
-        X, y_multi, window_size, window_type, fit_obj, {}, tag,
+    simulation_hash, _metadata_for_hash = generate_simulation_hash(
+        X, y_multi, window_size, window_type, [], {}, tag,
         position_func, position_params, train_frequency
     )
     
@@ -358,7 +370,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     if use_cache:
         cached_results, cached_metadata = load_simulation_results(simulation_hash, tag)
         if cached_results is not None:
-            logger.info("✅ Using cached simulation results")
+            logger.info("Using cached simulation results")
             return cached_results
     
     # Generate training calendar
@@ -423,7 +435,7 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     
     # Generate metadata for reproducibility
     metadata = generate_simulation_metadata(
-        X, y_multi, window_size, window_type, fit_obj, {},
+        X, y_multi, window_size, window_type, [], {},
         tag, position_func, position_params, train_frequency,
         etf_symbols=list(X.columns), target_etfs=target_cols
     )
@@ -522,7 +534,7 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
     """
     Enhanced multi-target simulation with riskmodels.net integration
     
-    This enhanced version incorporates institutional-grade risk models to improve
+    This enhanced version incorporates risk models to improve
     portfolio construction, risk management, and performance attribution.
     
     NEW Parameters:
@@ -534,7 +546,7 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
     
     Educational Benefits:
     --------------------
-    - Learn how institutional asset managers integrate risk models
+    - Learn how asset managers integrate risk models
     - Understand factor-based portfolio optimization
     - Practice professional-quality risk management techniques
     - Master multi-dimensional financial data analysis
@@ -589,9 +601,9 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
         )
         
         if risk_data is not None:
-            logger.info("✅ Risk model data loaded successfully")
+            logger.info("Risk model data loaded successfully")
         else:
-            logger.warning("⚠️ Risk model data not available, proceeding without risk adjustment")
+            logger.warning("Risk model data not available, proceeding without risk adjustment")
     
     # Run standard multi-target simulation
     logger.info("Running core multi-target simulation...")
@@ -647,7 +659,7 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
             risk_adj_returns = (aligned_weights.shift(1) * aligned_returns).sum(axis=1).dropna()
             enhanced_results['risk_adjusted_returns'] = risk_adj_returns
         
-        logger.info("✅ Risk model enhancements applied successfully")
+        logger.info("Risk model enhancements applied successfully")
     
     return enhanced_results
 
@@ -659,8 +671,8 @@ def main():
     import numpy as np
     from datetime import datetime
     
-    print("🚀 Multi-Target Quantitative Trading Simulation Framework")
-    print("🆕 Enhanced with riskmodels.net Integration")
+    print("Multi-Target Quantitative Trading Simulation Framework")
+    print("Enhanced with riskmodels.net Integration")
     print("=" * 60)
     
     # Configuration
@@ -671,12 +683,12 @@ def main():
     RISKMODELS_API_KEY = os.getenv('RISKMODELS_API_KEY', 'demo_key_for_education')
     ENABLE_RISK_MODELS = True
     
-    print(f"🎯 Target ETFs: {TARGET_ETFS}")
-    print(f"📊 Feature ETFs: {len(FEATURE_ETFS)} sector ETFs")
-    print(f"🔑 Risk Models: {'Enabled' if ENABLE_RISK_MODELS else 'Disabled'}")
+    print(f"Target ETFs: {TARGET_ETFS}")
+    print(f"Feature ETFs: {len(FEATURE_ETFS)} sector ETFs")
+    print(f"Risk Models: {'Enabled' if ENABLE_RISK_MODELS else 'Disabled'}")
     
     if ENABLE_RISK_MODELS:
-        print("\n🔬 RUNNING ENHANCED SIMULATION")
+        print("\nRunning enhanced simulation")
         print("-" * 40)
         
         try:
@@ -689,7 +701,7 @@ def main():
                 enable_risk_adjustment=True
             )
             
-            print(f"\n✅ SIMULATION COMPLETED SUCCESSFULLY!")
+            print(f"\nSimulation completed successfully.")
             print(f"=" * 50)
             
             # Extract results for analysis
@@ -716,7 +728,7 @@ def main():
             standard_metrics = calculate_metrics(portfolio_returns)
             risk_adj_metrics = calculate_metrics(risk_adjusted_returns)
             
-            print(f"\n📊 PERFORMANCE SUMMARY")
+            print(f"\nPerformance summary")
             print(f"{'Metric':<20} {'Standard':<15} {'Risk-Adjusted':<15}")
             print("-" * 50)
             
@@ -724,7 +736,7 @@ def main():
                 print(f"{metric:<20} {standard_metrics[metric]:<15} {risk_adj_metrics[metric]:<15}")
             
             # Create visualizations
-            print(f"\n📈 GENERATING VISUALIZATIONS...")
+            print(f"\nGenerating visualizations...")
             
             # Set up the plot
             fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -808,7 +820,7 @@ def main():
             os.makedirs('reports', exist_ok=True)
             plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
             
-            print(f"✅ Results visualization saved: {plot_filename}")
+            print(f"Results visualization saved: {plot_filename}")
             
             # Display the plot
             plt.show()
@@ -816,9 +828,9 @@ def main():
             # Risk Analysis (if available)
             if 'risk_data' in enhanced_results:
                 risk_data = enhanced_results['risk_data']
-                print(f"\n🏛️ RISK MODEL ANALYSIS")
-                print(f"   📊 Factors analyzed: {list(risk_data.data_vars)}")
-                print(f"   🎯 Assets covered: {list(risk_data.ticker.values)}")
+                print(f"\nRisk model analysis")
+                print(f"   Factors analyzed: {list(risk_data.data_vars)}")
+                print(f"   Assets covered: {list(risk_data.ticker.values)}")
                 print(f"   📅 Risk data period: {len(risk_data.time)} days")
                 
                 # Show average factor exposures
@@ -833,26 +845,26 @@ def main():
                                 print(f"     {factor:10s}: {avg_exposure:+.3f}")
             
             # Summary and next steps
-            print(f"\n🎉 SIMULATION COMPLETE!")
-            print(f"📁 Results saved to: {os.path.abspath(plot_filename)}")
-            print(f"📊 Performance Summary:")
+            print(f"\nSimulation complete.")
+            print(f"Results saved to: {os.path.abspath(plot_filename)}")
+            print(f"Performance Summary:")
             print(f"   • Standard Portfolio Sharpe: {standard_metrics['Sharpe Ratio']}")
             print(f"   • Risk-Adjusted Sharpe: {risk_adj_metrics['Sharpe Ratio']}")
             print(f"   • Total Trading Days: {standard_metrics['Trading Days']}")
             
         except Exception as e:
-            print(f"❌ Simulation failed: {e}")
+            print(f"Simulation failed: {e}")
             logger.error(f"Main simulation error: {e}")
             import traceback
             traceback.print_exc()
     
-    print(f"\n🎓 NEXT STEPS:")
-    print(f"   📖 Explore Tutorial 1: Single-target analysis (notebooks/01_single_target_tutorial.ipynb)")
-    print(f"   📖 Try Tutorial 2: Multi-target strategies (notebooks/02_multi_target_tutorial.ipynb)")
-    print(f"   📖 Advanced Tutorial 4: riskmodels.net integration (notebooks/04_riskmodels_integration.ipynb)")
-    print(f"   🔗 Get API access: https://riskmodels.net")
-    print(f"   📁 View results: {os.path.abspath('reports/')}")
-    print(f"   📊 Check logs: {os.path.abspath('logs/')}")
+    print(f"\nNext steps:")
+    print(f"   Explore Tutorial 1: Single-target analysis (notebooks/01_single_target_tutorial.ipynb)")
+    print(f"   Try Tutorial 2: Multi-target strategies (notebooks/02_multi_target_tutorial.ipynb)")
+    print(f"   Advanced Tutorial 4: riskmodels.net integration (notebooks/04_riskmodels_integration.ipynb)")
+    print(f"   Get API access: https://riskmodels.net")
+    print(f"   View results: {os.path.abspath('reports/')}")
+    print(f"   Check logs: {os.path.abspath('logs/')}")
 
 if __name__ == "__main__":
     main()

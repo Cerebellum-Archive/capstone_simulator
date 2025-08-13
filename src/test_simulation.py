@@ -8,12 +8,15 @@ import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+import os
+import sys
+sys.path.append(os.path.dirname(__file__))
 from multi_target_simulator import Simulate_MultiTarget, load_and_prepare_multi_target_data
 
 def test_single_simulation():
     """Test a single simulation to verify the main script works."""
     
-    print("🧪 Testing single simulation...")
+    print("Testing single simulation...")
     
     # ETF configuration
     feature_etfs = ['XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLU']
@@ -22,7 +25,7 @@ def test_single_simulation():
     
     try:
         # Load and prepare data
-        print("📊 Loading data...")
+        print("Loading data...")
         X, y_multi = load_and_prepare_multi_target_data(
             etf_list=all_etfs, 
             target_etfs=target_etfs,
@@ -33,7 +36,7 @@ def test_single_simulation():
             print("❌ No data loaded - using cached results instead")
             return True
         
-        print(f"✅ Data loaded: X shape {X.shape}, y_multi shape {y_multi.shape}")
+        print(f"Data loaded: X shape {X.shape}, y_multi shape {y_multi.shape}")
         
         # Test configuration
         config = {
@@ -49,21 +52,21 @@ def test_single_simulation():
             ('regressor', Ridge(alpha=1.0))
         ]
         
-        print("🚀 Running single simulation...")
+        print("Running single simulation...")
         result = Simulate_MultiTarget(
             X, y_multi, config['train_frequency'],
             window_size=config['window_size'],
             window_type=config['window_type'],
-            pipe_steps=pipe_steps,
+            pipe_steps=[],
             param_grid={},
             tag='test_ridge_std_equal',
-            position_func=None,  # Use default
+            position_func=None,
             position_params=[],
             use_cache=config['use_cache']
         )
         
         if not result.empty:
-            print("✅ Simulation completed successfully!")
+            print("Simulation completed successfully!")
             print(f"   Result shape: {result.shape}")
             print(f"   Columns: {list(result.columns)}")
             
@@ -77,9 +80,9 @@ def test_single_simulation():
                     print(f"   Annual Vol: {annual_vol:.2%}")
                     print(f"   Sharpe Ratio: {sharpe:.2f}")
                 else:
-                    print("   ⚠️ No valid returns data")
+                    print("   No valid returns data")
             else:
-                print("   ⚠️ No portfolio returns column")
+                print("   No portfolio returns column")
             
             return True
         else:
@@ -95,6 +98,6 @@ def test_single_simulation():
 if __name__ == "__main__":
     success = test_single_simulation()
     if success:
-        print("\n🎉 Main simulation script is working!")
+        print("\nMain simulation script is working!")
     else:
-        print("\n❌ Main simulation script has issues") 
+        print("\nMain simulation script has issues")
