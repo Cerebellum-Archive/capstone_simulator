@@ -93,7 +93,14 @@ def run_simulation(etf_list, target_etf, start_date, window_size, window_type, m
 
     common_index = result_df.index.intersection(y.index)
     regout = result_df.loc[common_index].copy()
-    regout['actual'] = y.loc[common_index]
+
+    # Extract actual values, handling both Series and DataFrame cases
+    actual_values = y.loc[common_index]
+    if isinstance(actual_values, pd.DataFrame):
+        # If it's a DataFrame, extract the first column as Series
+        actual_values = actual_values.iloc[:, 0]
+
+    regout['actual'] = actual_values
     sizer = BinaryPositionSizer(-1.0, 1.0)
     regout['leverage'] = sizer.calculate_position(regout['prediction'])
     regout['perf_ret'] = regout['leverage'] * regout['actual']

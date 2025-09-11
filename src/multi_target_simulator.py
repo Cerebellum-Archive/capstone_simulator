@@ -435,8 +435,9 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     
     # Generate metadata for reproducibility
     metadata = generate_simulation_metadata(
-        X, y_multi, window_size, window_type, [], {},
-        tag, position_func, position_params, train_frequency,
+        X=X, y_multi=y_multi, window_size=window_size, window_type=window_type,
+        pipe_steps=[], param_grid={},
+        tag=tag, train_frequency=train_frequency,
         etf_symbols=list(X.columns), target_etfs=target_cols
     )
     

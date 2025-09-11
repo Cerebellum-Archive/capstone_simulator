@@ -147,7 +147,14 @@ def run_sweep():
         # Compute performance on simulated portfolio using repo's position sizing
         common_index = result_df.index.intersection(y.index)
         regout = result_df.loc[common_index].copy()
-        regout['actual'] = y.loc[common_index]
+
+        # Extract actual values, handling both Series and DataFrame cases
+        actual_values = y.loc[common_index]
+        if isinstance(actual_values, pd.DataFrame):
+            # If it's a DataFrame, extract the first column as Series
+            actual_values = actual_values.iloc[:, 0]
+
+        regout['actual'] = actual_values
         # Use a simple binary sizer (consistent with single_target main flow)
         sizer = BinaryPositionSizer(-1.0, 1.0)
         regout['leverage'] = sizer.calculate_position(regout['prediction'])

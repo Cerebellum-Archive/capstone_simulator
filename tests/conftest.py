@@ -73,14 +73,14 @@ def sample_features_targets(sample_returns_data):
 @pytest.fixture
 def mock_yfinance_download():
     """Mock yfinance download to avoid external API calls during testing."""
-    def _mock_download(symbols, start=None, auto_adjust=True):
+    def _mock_download(symbols, start=None, end=None, auto_adjust=True, group_by='column', progress=True, **kwargs):
         # Generate fake price data based on symbols
         if isinstance(symbols, str):
             symbols = [symbols]
         
         # Create realistic date range
         start_date = pd.Timestamp(start) if start else pd.Timestamp('2020-01-01')
-        end_date = pd.Timestamp.now()
+        end_date = pd.Timestamp(end) if end else pd.Timestamp.now()
         dates = pd.date_range(start=start_date, end=end_date, freq='B')
         
         # Generate prices for each symbol

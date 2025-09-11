@@ -1026,10 +1026,10 @@ def risk_adjusted_portfolio_optimization(predictions: pd.DataFrame,
                 # Get predictions and risk factors for this date
                 date_predictions = pred_common.loc[date]
                 date_risk = risk_common.sel(time=date, method='nearest')
-                
+
                 # Simple risk-adjusted optimization
                 # In production, this would use sophisticated optimization (cvxpy, etc.)
-                
+
                 # Step 1: Start with long-only prediction-based weights
                 # Apply same long-only logic as standard portfolio
                 positive_predictions = date_predictions[date_predictions > 0]
@@ -1040,10 +1040,11 @@ def risk_adjusted_portfolio_optimization(predictions: pd.DataFrame,
                 else:
                     # If all negative, use equal weights (long-only)
                     raw_weights = pd.Series(1.0 / len(date_predictions), index=date_predictions.index)
-                
+
                 # Step 2: Apply risk adjustments
-                market_betas = date_risk['Market'].values
-                residual_vols = date_risk['Residual'].values
+                # Ensure we get 1D arrays by flattening/squeezing
+                market_betas = date_risk['Market'].values.flatten()
+                residual_vols = date_risk['Residual'].values.flatten()
                 
                 # Calculate total risk for each asset
                 total_risks = np.abs(market_betas) + residual_vols
@@ -1143,10 +1144,13 @@ def L_func_multi_target_equal_weight_long_only(predictions_df, params=[]):
             # If we have positive predictions, use only those
             positions.loc[idx] = 0
             positions.loc[idx, row > 0] = 1.0 / positive_count
-        else:
+        elif len(row) > 0:
             # If all predictions are negative, invest equally in all assets
             # This prevents staying in cash and missing market returns
             positions.loc[idx] = 1.0 / len(row)
+        else:
+            # If no assets available, stay in cash
+            positions.loc[idx] = 0.0
     
     return positions.fillna(0)
 
