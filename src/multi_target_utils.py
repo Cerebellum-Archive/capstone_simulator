@@ -142,6 +142,13 @@ class BenchmarkConfig:
     benchmark_types: List[str] = None
     volatility_window: int = 63  # Days for volatility calculation
     
+    # Additional benchmark configuration parameters
+    include_spy_only: bool = True
+    include_equal_weight_targets: bool = True
+    include_vti_market: bool = True
+    include_risk_parity: bool = True
+    include_zero_return: bool = True
+    
     def __post_init__(self):
         if self.benchmark_types is None:
             # Don't filter benchmarks by default - let strategy type determine appropriate ones

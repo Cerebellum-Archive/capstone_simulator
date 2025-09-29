@@ -875,3 +875,111 @@ def create_simple_comparison_plot(regout_list, sweep_tags, config):
     plt.close()
     
     return filename
+
+def create_professional_tear_sheet(regout_list, sweep_tags, config_dict):
+    """
+    Create a professional PDF tear sheet for multi-target strategies.
+    
+    This function generates a comprehensive PDF report with performance
+    analysis, visualizations, and strategy comparisons.
+    
+    Parameters:
+    -----------
+    regout_list : list
+        List of simulation results DataFrames
+    sweep_tags : list
+        List of strategy identifiers
+    config_dict : dict
+        Configuration dictionary with metadata
+        
+    Returns:
+    --------
+    str
+        Path to the generated PDF file
+    """
+    import os
+    from matplotlib.backends.backend_pdf import PdfPages
+    
+    # Create reports directory
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    reports_dir = os.path.join(os.path.dirname(current_dir), 'reports')
+    os.makedirs(reports_dir, exist_ok=True)
+    
+    # Generate filename
+    timestamp = config_dict.get('run_timestamp', 'unknown')
+    filename = os.path.join(reports_dir, f'multi_target_tear_sheet_{timestamp}.pdf')
+    
+    # Create PDF with multiple pages
+    with PdfPages(filename) as pdf:
+        # Page 1: Executive Summary
+        fig = plt.figure(figsize=(11, 8.5))
+        fig.suptitle('Multi-Target Portfolio Strategy Analysis', fontsize=16, fontweight='bold')
+        
+        # Add summary text
+        summary_text = f"""
+        Analysis Period: {config_dict.get('start_date', 'N/A')} to Present
+        Target ETFs: {', '.join(config_dict.get('target_etfs', []))}
+        Feature ETFs: {', '.join(config_dict.get('feature_etfs', []))}
+        Training Frequency: {config_dict.get('train_frequency', 'N/A')}
+        Window Type: {config_dict.get('window_type', 'N/A')}
+        Total Strategies: {len(sweep_tags)}
+        
+        This report provides a comprehensive analysis of multi-target portfolio
+        strategies using machine learning models and advanced position sizing
+        techniques. The analysis includes performance metrics, risk analysis,
+        and strategy comparisons.
+        """
+        
+        plt.figtext(0.1, 0.7, summary_text, fontsize=12, verticalalignment='top')
+        plt.axis('off')
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close()
+        
+        # Page 2: Performance Summary Table
+        if regout_list and len(regout_list) > 0:
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            fig.suptitle('Strategy Performance Summary', fontsize=16, fontweight='bold')
+            
+            # Create a simple performance table
+            performance_data = []
+            for i, tag in enumerate(sweep_tags[:10]):  # Show top 10 strategies
+                if i < len(regout_list):
+                    regout = regout_list[i]
+                    if 'portfolio_return' in regout.columns:
+                        returns = regout['portfolio_return'].dropna()
+                        if len(returns) > 0:
+                            annual_return = returns.mean() * 252
+                            volatility = returns.std() * np.sqrt(252)
+                            sharpe = annual_return / volatility if volatility > 0 else 0
+                            performance_data.append([tag, f"{annual_return:.2%}", f"{volatility:.2%}", f"{sharpe:.3f}"])
+            
+            if performance_data:
+                table_data = [['Strategy', 'Annual Return', 'Volatility', 'Sharpe Ratio']] + performance_data
+                ax.table(cellText=table_data, loc='center', cellLoc='center')
+                ax.axis('off')
+            
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close()
+        
+        # Page 3: Strategy Comparison Chart
+        if regout_list and len(regout_list) > 0:
+            fig, ax = plt.subplots(figsize=(11, 8.5))
+            fig.suptitle('Strategy Performance Comparison', fontsize=16, fontweight='bold')
+            
+            # Plot cumulative returns for first few strategies
+            for i, (regout, tag) in enumerate(zip(regout_list[:5], sweep_tags[:5])):
+                if 'portfolio_return' in regout.columns:
+                    returns = regout['portfolio_return'].dropna()
+                    if len(returns) > 0:
+                        cumulative = (1 + returns).cumprod()
+                        ax.plot(cumulative.index, cumulative.values, label=tag, linewidth=2)
+            
+            ax.set_title('Cumulative Returns Comparison')
+            ax.set_ylabel('Cumulative Return')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close()
+    
+    return filename

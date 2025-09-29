@@ -104,6 +104,34 @@ except ImportError:
         TRADING_DAYS_PER_YEAR
     )
 
+# Strategy classes for compatibility with notebook imports
+class EqualWeightStrategy:
+    """Wrapper class for EqualWeight position sizer."""
+    def __init__(self, base_leverage=1.0):
+        self.sizer = EqualWeight(base_leverage)
+    
+    def calculate_positions(self, predictions_df, params=None):
+        """Calculate positions using equal weight strategy."""
+        return self.sizer.calculate_weights(predictions_df.iloc[0])
+
+class ConfidenceWeightedStrategy:
+    """Wrapper class for ConfidenceWeighted position sizer."""
+    def __init__(self, max_leverage=2.0, confidence_threshold=0.0):
+        self.sizer = ConfidenceWeighted(max_leverage, confidence_threshold)
+    
+    def calculate_positions(self, predictions_df, params=None):
+        """Calculate positions using confidence weighted strategy."""
+        return self.sizer.calculate_weights(predictions_df.iloc[0])
+
+class LongShortStrategy:
+    """Wrapper class for LongShort position sizer."""
+    def __init__(self, max_leverage=1.0, confidence_threshold=0.0):
+        self.sizer = LongShort(max_leverage, confidence_threshold)
+    
+    def calculate_positions(self, predictions_df, params=None):
+        """Calculate positions using long-short strategy."""
+        return self.sizer.calculate_weights(predictions_df.iloc[0])
+
 # Import existing utilities from utils_simulate
 try:
     from .utils_simulate import (
@@ -266,23 +294,53 @@ def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str],
         actuals_df.columns = target_cols  # Remove '_actual' suffix
         
         # Apply position sizing function
-        positions_df = position_func(predictions_df, position_params)
+        positions_result = position_func(predictions_df, params=position_params)
         
-        # Calculate portfolio returns (positions are applied with 1-day lag)
-        portfolio_returns = []
-        
-        for i in range(len(regout)):
-            if i == 0:
-                # No position on first day
-                portfolio_returns.append(0.0)
-            else:
-                # Use previous day's positions with current day's returns
-                prev_positions = positions_df.iloc[i-1]
-                current_returns = actuals_df.iloc[i]
-                
-                # Portfolio return = sum(position * return)
-                portfolio_return = (prev_positions * current_returns).sum()
-                portfolio_returns.append(portfolio_return)
+        # Handle different return types from position functions
+        if isinstance(positions_result, pd.Series):
+            # Position function returns aggregate leverage (Series)
+            # For equal weight, distribute leverage equally across assets
+            leverage_series = positions_result
+            n_assets = len(target_cols)
+            
+            # Calculate portfolio returns using aggregate leverage
+            portfolio_returns = []
+            for i in range(len(regout)):
+                if i == 0:
+                    # No position on first day
+                    portfolio_returns.append(0.0)
+                else:
+                    # Use previous day's leverage with current day's returns
+                    prev_leverage = leverage_series.iloc[i-1]
+                    current_returns = actuals_df.iloc[i]
+                    
+                    # For equal weight strategies, use average return scaled by leverage
+                    portfolio_return = prev_leverage * current_returns.mean()
+                    portfolio_returns.append(portfolio_return)
+            
+            # Create positions DataFrame for compatibility (equal weight)
+            positions_df = pd.DataFrame(index=predictions_df.index, columns=target_cols)
+            for i, col in enumerate(target_cols):
+                positions_df[col] = leverage_series / n_assets
+            
+        else:
+            # Position function returns individual asset positions (DataFrame)
+            positions_df = positions_result
+            
+            # Calculate portfolio returns (positions are applied with 1-day lag)
+            portfolio_returns = []
+            for i in range(len(regout)):
+                if i == 0:
+                    # No position on first day
+                    portfolio_returns.append(0.0)
+                else:
+                    # Use previous day's positions with current day's returns
+                    prev_positions = positions_df.iloc[i-1]
+                    current_returns = actuals_df.iloc[i]
+                    
+                    # Portfolio return = sum(position * return)
+                    portfolio_return = (prev_positions * current_returns).sum()
+                    portfolio_returns.append(portfolio_return)
         
         # Add portfolio returns to regout
         regout['portfolio_return'] = portfolio_returns
@@ -663,6 +721,188 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
         logger.info("Risk model enhancements applied successfully")
     
     return enhanced_results
+
+def run_comprehensive_strategy_sweep(X, y_multi, target_etfs, config, benchmark_config):
+    """
+    Run comprehensive strategy sweep with multiple models and position sizing strategies.
+    
+    This function implements a professional-grade strategy comparison framework
+    that tests multiple combinations of:
+    - Machine learning models (Ridge, Random Forest, Linear Regression)
+    - Position sizing strategies (Equal Weight, Confidence Weighted, Long-Short)
+    - Model parameters (different regularization strengths)
+    
+    Parameters:
+    -----------
+    X : pd.DataFrame
+        Feature data for training
+    y_multi : pd.DataFrame
+        Multi-target returns to predict
+    target_etfs : list
+        List of target ETF symbols
+    config : SimulationConfig
+        Simulation configuration parameters
+    benchmark_config : BenchmarkConfig
+        Benchmark configuration parameters
+        
+    Returns:
+    --------
+    tuple
+        (regout_list, sweep_tags, stats_df) where:
+        - regout_list: List of simulation results DataFrames
+        - sweep_tags: List of strategy identifiers
+        - stats_df: DataFrame with performance statistics
+    """
+    
+    logger.info("Starting comprehensive strategy sweep")
+    logger.info(f"Target ETFs: {target_etfs}")
+    logger.info(f"Data shape: {X.shape} features, {y_multi.shape} targets")
+    
+    # Define model configurations
+    model_configs = [
+        {'name': 'ridge', 'model': Ridge, 'params': {'alpha': 1.0}},
+        {'name': 'ridge_strong', 'model': Ridge, 'params': {'alpha': 10.0}},
+        {'name': 'ridge_weak', 'model': Ridge, 'params': {'alpha': 0.1}},
+        {'name': 'rf', 'model': RandomForestRegressor, 'params': {'n_estimators': 100, 'random_state': 42}},
+        {'name': 'linear', 'model': LinearRegression, 'params': {}},
+        {'name': 'huber', 'model': HuberRegressor, 'params': {'epsilon': 1.35}},
+        {'name': 'elasticnet', 'model': ElasticNet, 'params': {'alpha': 0.1, 'l1_ratio': 0.5}}
+    ]
+    
+    # Define position sizing strategies
+    position_strategies = [
+        {'name': 'equal_weight', 'func': L_func_multi_target_equal_weight_long_only, 'params': []},
+        {'name': 'confidence_weighted', 'func': L_func_multi_target_confidence_weighted, 'params': [2.0]},
+        {'name': 'long_short', 'func': L_func_multi_target_long_short, 'params': [1.0]}
+    ]
+    
+    # Generate all combinations
+    sweep_combinations = []
+    for model_config in model_configs:
+        for pos_config in position_strategies:
+            combination = {
+                'model_name': model_config['name'],
+                'model_class': model_config['model'],
+                'model_params': model_config['params'],
+                'position_name': pos_config['name'],
+                'position_func': pos_config['func'],
+                'position_params': pos_config['params'],
+                'tag': f"mt_{model_config['name']}_{pos_config['name']}"
+            }
+            sweep_combinations.append(combination)
+    
+    logger.info(f"Generated {len(sweep_combinations)} strategy combinations")
+    
+    # Run simulations
+    regout_list = []
+    sweep_tags = []
+    metadata_list = []
+    
+    for i, combo in enumerate(sweep_combinations):
+        logger.info(f"Running strategy {i+1}/{len(sweep_combinations)}: {combo['tag']}")
+        
+        try:
+            # Create model with MultiOutputRegressor wrapper
+            base_model = combo['model_class'](**combo['model_params'])
+            fit_obj = MultiOutputRegressor(base_model)
+            
+            # Run simulation
+            regout = Simulate_MultiTarget(
+                X, y_multi,
+                train_frequency=config.train_frequency,
+                window_size=config.window_size,
+                window_type=config.window_type,
+                fit_obj=fit_obj,
+                position_func=combo['position_func'],
+                tag=combo['tag'],
+                position_params=combo['position_params'],
+                use_cache=config.use_cache,
+                save_results=True
+            )
+            
+            if not regout.empty:
+                regout_list.append(regout)
+                sweep_tags.append(combo['tag'])
+                
+                # Generate metadata
+                metadata = generate_simulation_metadata(
+                    X=X, y_multi=y_multi, window_size=config.window_size, 
+                    window_type=config.window_type, pipe_steps=[], param_grid={},
+                    tag=combo['tag'], train_frequency=config.train_frequency,
+                    etf_symbols=list(X.columns), target_etfs=target_etfs
+                )
+                metadata_list.append(metadata)
+                
+                logger.info(f"Completed {combo['tag']}: {len(regout)} predictions")
+            else:
+                logger.warning(f"No results for {combo['tag']}")
+                
+        except Exception as e:
+            logger.error(f"Failed to run {combo['tag']}: {e}")
+            continue
+    
+    if not regout_list:
+        logger.error("No successful simulations completed")
+        return [], [], pd.DataFrame()
+    
+    logger.info(f"Successfully completed {len(regout_list)} simulations")
+    
+    # Calculate performance statistics
+    stats_data = {}
+    
+    for i, (regout, tag) in enumerate(zip(regout_list, sweep_tags)):
+        try:
+            # Extract portfolio returns
+            if 'portfolio_return' in regout.columns:
+                portfolio_returns = regout['portfolio_return'].dropna()
+            else:
+                # Fallback: calculate from individual returns
+                target_cols = [col for col in regout.columns if col.endswith('_actual')]
+                if target_cols:
+                    # Simple equal weight portfolio
+                    portfolio_returns = regout[target_cols].mean(axis=1).dropna()
+                else:
+                    portfolio_returns = pd.Series(dtype=float)
+            
+            if len(portfolio_returns) == 0:
+                logger.warning(f"No portfolio returns for {tag}")
+                continue
+            
+            # Calculate performance metrics
+            metrics = calculate_performance_metrics(portfolio_returns)
+            
+            # Add additional statistics
+            stats_data[tag] = {
+                'return': metrics['annualized_return'],
+                'volatility': metrics['volatility'],
+                'sharpe': metrics['sharpe_ratio'],
+                'max_drawdown': metrics['max_drawdown'],
+                'calmar': metrics['calmar_ratio'],
+                'total_return': metrics['total_return'],
+                'start_date': regout.index.min().strftime('%Y-%m-%d'),
+                'end_date': regout.index.max().strftime('%Y-%m-%d'),
+                'n_periods': len(portfolio_returns)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate stats for {tag}: {e}")
+            continue
+    
+    # Create statistics DataFrame
+    if stats_data:
+        stats_df = pd.DataFrame(stats_data).T
+        stats_df.index.name = 'strategy'
+        
+        # Sort by Sharpe ratio
+        stats_df = stats_df.sort_values('sharpe', ascending=False)
+        
+        logger.info(f"Performance statistics calculated for {len(stats_df)} strategies")
+        logger.info(f"Best strategy: {stats_df.index[0]} (Sharpe: {stats_df.iloc[0]['sharpe']:.3f})")
+    else:
+        stats_df = pd.DataFrame()
+        logger.warning("No performance statistics calculated")
+    
+    return regout_list, sweep_tags, stats_df
 
 def main():
     """
