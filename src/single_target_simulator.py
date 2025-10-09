@@ -580,6 +580,14 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
     df = pd.DataFrame(dtype=object)
     df.index.name = 'metric'
     
+    # Handle None trange - use full range
+    if trange is None:
+        if len(regout_list) > 0 and not regout_list[0].empty:
+            trange = slice(regout_list[0].index[0], regout_list[0].index[-1])
+        else:
+            logger.warning("Cannot determine trange - regout_list is empty")
+            trange = slice(None, None)
+    
     print('SIMULATION RANGE:', 'from', trange.start, 'to', trange.stop)
     logger.info(f"Calculating statistics for {len(regout_list)} strategies")
 
