@@ -724,7 +724,7 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                     # Get all ETF returns for the period
                     all_etfs = [target_etf] + (feature_etfs or [])
                     start_date = config.get('start_date', '2010-01-01') if config else '2010-01-01'
-                    X, y = load_and_prepare_data(all_etfs, target_etf, start_date=start_date)
+                    X, y, all_returns_df = load_and_prepare_data(all_etfs, target_etf, start_date=start_date)
                     all_returns_data = pd.concat([X, y.to_frame(target_etf)], axis=1)
                     
                     # Calculate benchmark returns for the simulation period
