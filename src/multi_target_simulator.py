@@ -111,8 +111,8 @@ class EqualWeightStrategy:
         self.sizer = EqualWeight(base_leverage)
     
     def calculate_positions(self, predictions_df, params=None):
-        """Calculate positions using equal weight strategy."""
-        return self.sizer.calculate_weights(predictions_df.iloc[0])
+        """Calculate positions using equal weight strategy for each row."""
+        return predictions_df.apply(self.sizer.calculate_weights, axis=1)
 
 class ConfidenceWeightedStrategy:
     """Wrapper class for ConfidenceWeighted position sizer."""
@@ -120,8 +120,8 @@ class ConfidenceWeightedStrategy:
         self.sizer = ConfidenceWeighted(max_leverage, confidence_threshold)
     
     def calculate_positions(self, predictions_df, params=None):
-        """Calculate positions using confidence weighted strategy."""
-        return self.sizer.calculate_weights(predictions_df.iloc[0])
+        """Calculate positions using confidence weighted strategy for each row."""
+        return predictions_df.apply(self.sizer.calculate_weights, axis=1)
 
 class LongShortStrategy:
     """Wrapper class for LongShort position sizer."""
@@ -129,8 +129,8 @@ class LongShortStrategy:
         self.sizer = LongShort(max_leverage, confidence_threshold)
     
     def calculate_positions(self, predictions_df, params=None):
-        """Calculate positions using long-short strategy."""
-        return self.sizer.calculate_weights(predictions_df.iloc[0])
+        """Calculate positions using long-short strategy for each row."""
+        return predictions_df.apply(self.sizer.calculate_weights, axis=1)
 
 # Import existing utilities from utils_simulate
 try:
@@ -294,53 +294,23 @@ def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str],
         actuals_df.columns = target_cols  # Remove '_actual' suffix
         
         # Apply position sizing function
-        positions_result = position_func(predictions_df, params=position_params)
+        # All multi-target position functions now return a DataFrame of individual asset positions
+        positions_df = position_func(predictions_df, params=position_params)
         
-        # Handle different return types from position functions
-        if isinstance(positions_result, pd.Series):
-            # Position function returns aggregate leverage (Series)
-            # For equal weight, distribute leverage equally across assets
-            leverage_series = positions_result
-            n_assets = len(target_cols)
-            
-            # Calculate portfolio returns using aggregate leverage
-            portfolio_returns = []
-            for i in range(len(regout)):
-                if i == 0:
-                    # No position on first day
-                    portfolio_returns.append(0.0)
-                else:
-                    # Use previous day's leverage with current day's returns
-                    prev_leverage = leverage_series.iloc[i-1]
-                    current_returns = actuals_df.iloc[i]
-                    
-                    # For equal weight strategies, use average return scaled by leverage
-                    portfolio_return = prev_leverage * current_returns.mean()
-                    portfolio_returns.append(portfolio_return)
-            
-            # Create positions DataFrame for compatibility (equal weight)
-            positions_df = pd.DataFrame(index=predictions_df.index, columns=target_cols)
-            for i, col in enumerate(target_cols):
-                positions_df[col] = leverage_series / n_assets
-            
-        else:
-            # Position function returns individual asset positions (DataFrame)
-            positions_df = positions_result
-            
-            # Calculate portfolio returns (positions are applied with 1-day lag)
-            portfolio_returns = []
-            for i in range(len(regout)):
-                if i == 0:
-                    # No position on first day
-                    portfolio_returns.append(0.0)
-                else:
-                    # Use previous day's positions with current day's returns
-                    prev_positions = positions_df.iloc[i-1]
-                    current_returns = actuals_df.iloc[i]
-                    
-                    # Portfolio return = sum(position * return)
-                    portfolio_return = (prev_positions * current_returns).sum()
-                    portfolio_returns.append(portfolio_return)
+        # Calculate portfolio returns (positions are applied with 1-day lag)
+        portfolio_returns = []
+        for i in range(len(regout)):
+            if i == 0:
+                # No position on first day
+                portfolio_returns.append(0.0)
+            else:
+                # Use previous day's positions with current day's returns
+                prev_positions = positions_df.iloc[i-1]
+                current_returns = actuals_df.iloc[i]
+                
+                # Portfolio return = sum(position * return)
+                portfolio_return = (prev_positions * current_returns).sum()
+                portfolio_returns.append(portfolio_return)
         
         # Add portfolio returns to regout
         regout['portfolio_return'] = portfolio_returns
@@ -362,7 +332,7 @@ def _calculate_portfolio_returns(regout: pd.DataFrame, target_cols: List[str],
 def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type, 
                         fit_obj, position_func, tag='multi_target',
                         position_params=None, use_cache=True, 
-                        save_results=True, **kwargs):
+                        save_results=True, benchmark_config=None, **kwargs):
     """
     Core multi-target simulation engine.
     
@@ -394,6 +364,8 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
         Whether to use cached results if available
     save_results : bool
         Whether to save results to cache
+    benchmark_config : BenchmarkConfig, optional
+        Configuration for benchmark calculations
         
     Returns:
     --------
@@ -483,6 +455,10 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     
     # Convert results to DataFrame
     regout = pd.DataFrame(results)
+    if regout.empty:
+        logger.error("Simulation failed to generate any predictions")
+        return pd.DataFrame()
+        
     regout.set_index('date', inplace=True)
     regout.sort_index(inplace=True)
     
@@ -491,6 +467,32 @@ def Simulate_MultiTarget(X, y_multi, train_frequency, window_size, window_type,
     # Calculate portfolio returns
     regout = _calculate_portfolio_returns(regout, target_cols, position_func, position_params)
     
+    # Calculate benchmarks if requested
+    if benchmark_config is not None:
+        try:
+            from .multi_target_utils import MultiTargetBenchmarkManager
+        except ImportError:
+            from multi_target_utils import MultiTargetBenchmarkManager
+            
+        logger.info("Calculating comprehensive benchmarks")
+        # Combine X and y_multi for benchmark calculation (buy-and-hold uses returns)
+        all_data = pd.concat([X, y_multi], axis=1).sort_index()
+        # Drop duplicates if any overlap exists
+        all_data = all_data.loc[~all_data.index.duplicated(keep='first')]
+        
+        benchmark_manager = MultiTargetBenchmarkManager(
+            target_etfs=target_cols,
+            feature_etfs=list(X.columns),
+            config=benchmark_config
+        )
+        benchmark_results = benchmark_manager.calculate_all_benchmarks(all_data, regout.index)
+        
+        # Add benchmarks to regout
+        for col in benchmark_results.columns:
+            regout[col] = benchmark_results[col]
+            
+        logger.info(f"Added {len(benchmark_results.columns)} benchmarks to results")
+
     # Generate metadata for reproducibility
     metadata = generate_simulation_metadata(
         X=X, y_multi=y_multi, window_size=window_size, window_type=window_type,
@@ -586,9 +588,11 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
                                 window_size=400, window_type='expanding',
                                 model='ridge', model_params=None,
                                 position_sizer='equal_weight',
+                                train_frequency='monthly',
                                 start_date='2020-01-01', end_date=None,
                                 riskmodels_api_key=None,
                                 enable_risk_adjustment=True,
+                                benchmark_config=None,
                                 **kwargs):
     """
     Enhanced multi-target simulation with riskmodels.net integration
@@ -602,6 +606,10 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
         API key for riskmodels.net integration
     enable_risk_adjustment : bool, default True
         Whether to apply risk model adjustments to portfolio weights
+    train_frequency : str, default 'monthly'
+        How often to retrain the model ('daily', 'weekly', 'monthly')
+    benchmark_config : BenchmarkConfig, optional
+        Configuration for benchmark calculations
     
     Educational Benefits:
     --------------------
@@ -669,13 +677,14 @@ def Simulate_MultiTarget_Enhanced(target_etfs, feature_etfs,
     
     regout = Simulate_MultiTarget(
         X_features, y_targets,
-        train_frequency='monthly',
+        train_frequency=train_frequency,
         window_size=window_size,
         window_type=window_type,
         fit_obj=fit_obj,
         position_func=position_func,
         tag=f"enhanced_{position_sizer}",
-        position_params=position_params
+        position_params=position_params,
+        benchmark_config=benchmark_config
     )
     
     # Prepare enhanced results dictionary
@@ -817,7 +826,8 @@ def run_comprehensive_strategy_sweep(X, y_multi, target_etfs, config, benchmark_
                 tag=combo['tag'],
                 position_params=combo['position_params'],
                 use_cache=config.use_cache,
-                save_results=True
+                save_results=True,
+                benchmark_config=benchmark_config
             )
             
             if not regout.empty:

@@ -157,19 +157,19 @@ class TestPositionSizingStrategies:
         }, index=dates)
         
         # Test with default parameters
-        leverage = L_func_multi_target_equal_weight(predictions_df, params=[])
+        weights = L_func_multi_target_equal_weight(predictions_df, params=[])
         
         # Check output structure
-        assert isinstance(leverage, pd.Series)
-        assert len(leverage) == len(dates)
-        assert leverage.index.equals(predictions_df.index)
+        assert isinstance(weights, pd.DataFrame)
+        assert weights.shape == predictions_df.shape
+        assert weights.index.equals(predictions_df.index)
         
-        # Check leverage values are reasonable
-        assert leverage.abs().max() <= 2.0
+        # Check leverage values are reasonable (abs sum per row should be <= 1.0 by default)
+        assert weights.abs().sum(axis=1).max() <= 1.01
         
         # Test with custom base leverage
-        leverage_custom = L_func_multi_target_equal_weight(predictions_df, params=[1.5])
-        assert leverage_custom.abs().max() <= 1.5
+        weights_custom = L_func_multi_target_equal_weight(predictions_df, params=[1.5])
+        assert weights_custom.abs().sum(axis=1).max() <= 1.51
     
     def test_confidence_weighted_strategy(self):
         """Test confidence-weighted position sizing strategy."""
@@ -185,15 +185,15 @@ class TestPositionSizingStrategies:
             'IWM': np.random.normal(-0.001, 0.008, len(dates))
         }, index=dates)
         
-        leverage = L_func_multi_target_confidence_weighted(predictions_df, params=[2.0])
+        weights = L_func_multi_target_confidence_weighted(predictions_df, params=[2.0])
         
         # Check output structure
-        assert isinstance(leverage, pd.Series)
-        assert len(leverage) == len(dates)
+        assert isinstance(weights, pd.DataFrame)
+        assert weights.shape == predictions_df.shape
         
-        # Leverage should vary with confidence
-        assert leverage.std() > 0  # Should have variation
-        assert leverage.abs().max() <= 2.0  # Should respect max leverage
+        # Weights should vary with confidence
+        assert weights.std().sum() > 0  # Should have variation
+        assert weights.abs().sum(axis=1).max() <= 2.01  # Should respect max leverage
     
     def test_long_short_strategy(self):
         """Test long-short position sizing strategy."""
@@ -209,18 +209,18 @@ class TestPositionSizingStrategies:
             'IWM': np.random.normal(-0.003, 0.005, len(dates))  # Moderate negative
         }, index=dates)
         
-        leverage = L_func_multi_target_long_short(predictions_df, params=[1.5])
+        weights = L_func_multi_target_long_short(predictions_df, params=[1.5])
         
         # Check output structure
-        assert isinstance(leverage, pd.Series)
-        assert len(leverage) == len(dates)
+        assert isinstance(weights, pd.DataFrame)
+        assert weights.shape == predictions_df.shape
         
         # Should have both positive and negative values (long and short)
-        assert leverage.min() < 0
-        assert leverage.max() > 0
+        assert weights.min().min() < 0
+        assert weights.max().max() > 0
         
         # Should respect max leverage
-        assert leverage.abs().max() <= 1.5
+        assert weights.abs().sum(axis=1).max() <= 1.51
     
     def test_position_sizing_edge_cases(self):
         """Test position sizing with edge cases."""
@@ -233,22 +233,22 @@ class TestPositionSizingStrategies:
             'IWM': np.zeros(len(dates))
         }, index=dates)
         
-        leverage_eq = L_func_multi_target_equal_weight(zero_predictions)
-        leverage_conf = L_func_multi_target_confidence_weighted(zero_predictions)
-        leverage_ls = L_func_multi_target_long_short(zero_predictions)
+        weights_eq = L_func_multi_target_equal_weight(zero_predictions)
+        weights_conf = L_func_multi_target_confidence_weighted(zero_predictions)
+        weights_ls = L_func_multi_target_long_short(zero_predictions)
         
         # Should handle zeros gracefully
-        assert isinstance(leverage_eq, pd.Series)
-        assert isinstance(leverage_conf, pd.Series)
-        assert isinstance(leverage_ls, pd.Series)
+        assert isinstance(weights_eq, pd.DataFrame)
+        assert isinstance(weights_conf, pd.DataFrame)
+        assert isinstance(weights_ls, pd.DataFrame)
         
         # Test with single column
         single_col = pd.DataFrame({
             'SPY': np.random.normal(0.001, 0.01, len(dates))
         }, index=dates)
         
-        leverage_single = L_func_multi_target_equal_weight(single_col)
-        assert len(leverage_single) == len(dates)
+        weights_single = L_func_multi_target_equal_weight(single_col)
+        assert weights_single.shape == single_col.shape
 
 
 class TestPositionSizerClasses:
@@ -367,17 +367,17 @@ class TestErrorHandling:
         predictions_df.iloc[5:8] = np.nan
         
         # Should handle NaN gracefully
-        leverage_eq = L_func_multi_target_equal_weight(predictions_df)
-        leverage_conf = L_func_multi_target_confidence_weighted(predictions_df)
-        leverage_ls = L_func_multi_target_long_short(predictions_df)
+        weights_eq = L_func_multi_target_equal_weight(predictions_df)
+        weights_conf = L_func_multi_target_confidence_weighted(predictions_df)
+        weights_ls = L_func_multi_target_long_short(predictions_df)
         
         # Check that functions don't crash
-        assert isinstance(leverage_eq, pd.Series)
-        assert isinstance(leverage_conf, pd.Series)
-        assert isinstance(leverage_ls, pd.Series)
+        assert isinstance(weights_eq, pd.DataFrame)
+        assert isinstance(weights_conf, pd.DataFrame)
+        assert isinstance(weights_ls, pd.DataFrame)
         
         # NaN positions should result in zero leverage or be handled appropriately
-        assert len(leverage_eq) == len(dates)
+        assert weights_eq.shape == (20, 3)
     
     def test_position_sizing_with_extreme_predictions(self):
         """Test position sizing with extreme prediction values."""
@@ -392,14 +392,14 @@ class TestErrorHandling:
         
         # Should handle extreme values
         try:
-            leverage_eq = L_func_multi_target_equal_weight(extreme_predictions)
-            leverage_conf = L_func_multi_target_confidence_weighted(extreme_predictions)
-            leverage_ls = L_func_multi_target_long_short(extreme_predictions)
+            weights_eq = L_func_multi_target_equal_weight(extreme_predictions)
+            weights_conf = L_func_multi_target_confidence_weighted(extreme_predictions)
+            weights_ls = L_func_multi_target_long_short(extreme_predictions)
             
             # Check that results are finite where possible
-            assert np.isfinite(leverage_eq).any()
-            assert np.isfinite(leverage_conf).any()
-            assert np.isfinite(leverage_ls).any()
+            assert np.isfinite(weights_eq.values).any()
+            assert np.isfinite(weights_conf.values).any()
+            assert np.isfinite(weights_ls.values).any()
             
         except Exception as e:
             # If functions can't handle extreme values, they should fail gracefully
@@ -411,8 +411,8 @@ class TestErrorHandling:
         
         # Should handle empty input gracefully
         try:
-            leverage_eq = L_func_multi_target_equal_weight(empty_df)
-            assert len(leverage_eq) == 0
+            weights_eq = L_func_multi_target_equal_weight(empty_df)
+            assert weights_eq.empty
         except (ValueError, IndexError):
             # Acceptable to raise error for empty input
             pass
@@ -466,25 +466,24 @@ class TestIntegration:
         
         results = {}
         for name, func in strategies.items():
-            leverage = func(predictions_df, params=[1.0])
-            results[name] = leverage
+            weights = func(predictions_df, params=[1.0])
+            results[name] = weights
             
             # Basic validation
-            assert isinstance(leverage, pd.Series)
-            assert len(leverage) == len(dates)
-            assert leverage.index.equals(predictions_df.index)
+            assert isinstance(weights, pd.DataFrame)
+            assert weights.shape == predictions_df.shape
+            assert weights.index.equals(predictions_df.index)
         
         # Compare strategies
-        eq_vol = results['equal_weight'].std()
-        conf_vol = results['confidence_weighted'].std()
-        ls_vol = results['long_short'].std()
+        eq_vol = results['equal_weight'].std().sum()
+        conf_vol = results['confidence_weighted'].std().sum()
         
         # Confidence-weighted should be more dynamic than equal weight
         assert conf_vol >= eq_vol
         
         # Long-short should have different characteristics
-        assert results['long_short'].min() < 0  # Should have short positions
-        assert results['long_short'].max() > 0  # Should have long positions
+        assert results['long_short'].min().min() < 0  # Should have short positions
+        assert results['long_short'].max().max() > 0  # Should have long positions
     
     @pytest.mark.integration
     @pytest.mark.slow
@@ -518,9 +517,12 @@ class TestIntegration:
             # 2. Create mock results
             dates = X.iloc[:50].index
             mock_results = pd.DataFrame({
-                'SPY_prediction': np.random.normal(0.001, 0.01, len(dates)),
-                'QQQ_prediction': np.random.normal(0.002, 0.012, len(dates)),
-                'IWM_prediction': np.random.normal(0.0005, 0.015, len(dates)),
+                'SPY_pred': np.random.normal(0.001, 0.01, len(dates)),
+                'QQQ_pred': np.random.normal(0.002, 0.012, len(dates)),
+                'IWM_pred': np.random.normal(0.0005, 0.015, len(dates)),
+                'SPY_actual': np.random.normal(0.001, 0.01, len(dates)),
+                'QQQ_actual': np.random.normal(0.002, 0.012, len(dates)),
+                'IWM_actual': np.random.normal(0.0005, 0.015, len(dates)),
                 'portfolio_return': np.random.normal(0.0015, 0.01, len(dates))
             }, index=dates)
             
@@ -576,5 +578,5 @@ class TestPerformance:
             
             # Should complete quickly even with large dataset
             assert elapsed < 5.0  # 5 seconds max
-            assert len(result) == len(dates)
-            assert isinstance(result, pd.Series)
+            assert result.shape == predictions_df.shape
+            assert isinstance(result, pd.DataFrame)

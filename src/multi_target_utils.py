@@ -1163,43 +1163,127 @@ def L_func_multi_target_equal_weight_long_only(predictions_df, params=[]):
 
 def L_func_multi_target_equal_weight(predictions_df, params=[]):
     """
-    Aggregate leverage (Series) using equal-weight long-short signal.
-
-    For each date, compute the net signal as the average sign of predictions and
-    scale by base leverage (default 1.0).
+    Individual asset weights using equal-weight long-short signal.
+    
+    For each date, each asset gets a weight of (base_leverage / N) * sign(prediction).
     """
+    if predictions_df.empty or predictions_df.shape[1] == 0:
+        return pd.DataFrame(index=predictions_df.index, columns=predictions_df.columns)
+        
     base_leverage = params[0] if params else 1.0
-    signals = np.sign(predictions_df)
-    net_signal = signals.mean(axis=1).clip(-1.0, 1.0)
-    return (base_leverage * net_signal).astype(float)
+    n_assets = predictions_df.shape[1]
+    
+    # Calculate weights: (base_leverage / n_assets) * sign(prediction)
+    weights = np.sign(predictions_df) * (base_leverage / n_assets)
+    return weights.astype(float)
 
 def L_func_multi_target_confidence_weighted(predictions_df, params=[]):
     """
-    Aggregate leverage (Series) proportional to net prediction magnitude and sign.
-
-    For each date, leverage = max_leverage * sum(predictions) / sum(abs(predictions)).
-    Returns 0 if denominator is 0.
+    Individual asset weights proportional to prediction magnitude and sign.
+    
+    For each date, asset weight = max_leverage * prediction / sum(abs(predictions)).
     """
+    if predictions_df.empty or predictions_df.shape[1] == 0:
+        return pd.DataFrame(index=predictions_df.index, columns=predictions_df.columns)
+        
     max_leverage = params[0] if params else 2.0
     abs_sum = predictions_df.abs().sum(axis=1)
-    signed_sum = predictions_df.sum(axis=1)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        leverage = np.where(abs_sum > 0, max_leverage * (signed_sum / abs_sum), 0.0)
-    return pd.Series(leverage, index=predictions_df.index).astype(float)
+    
+    # Calculate weights: max_leverage * (prediction / abs_sum)
+    # Use fillna(0) to handle cases where abs_sum is 0
+    weights = predictions_df.div(abs_sum, axis=0).replace([np.inf, -np.inf], 0).fillna(0) * max_leverage
+    return weights.astype(float)
 
 def L_func_multi_target_long_short(predictions_df, params=[]):
     """
-    Aggregate leverage (Series) for long-short market-neutral style.
-
-    For each date, leverage = target_leverage * sum(predictions) / sum(abs(predictions)).
-    Returns 0 if denominator is 0. Sign varies with net prediction.
+    Individual asset weights for long-short market-neutral style.
+    
+    For each date, distributes half the leverage to the long side and half 
+    to the short side proportional to magnitudes on each side.
     """
+    if predictions_df.empty or predictions_df.shape[1] == 0:
+        return pd.DataFrame(index=predictions_df.index, columns=predictions_df.columns)
+        
     target_leverage = params[0] if params else 1.0
-    abs_sum = predictions_df.abs().sum(axis=1)
-    signed_sum = predictions_df.sum(axis=1)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        leverage = np.where(abs_sum > 0, target_leverage * (signed_sum / abs_sum), 0.0)
-    return pd.Series(leverage, index=predictions_df.index).astype(float)
+    
+    weights = pd.DataFrame(0.0, index=predictions_df.index, columns=predictions_df.columns)
+    
+    for idx in predictions_df.index:
+        row = predictions_df.loc[idx]
+        longs = row[row > 0]
+        shorts = row[row < 0]
+        
+        if not longs.empty:
+            long_sum = longs.sum()
+            if long_sum != 0:
+                weights.loc[idx, longs.index] = (longs / long_sum) * (target_leverage / 2.0)
+        
+        if not shorts.empty:
+            short_abs_sum = shorts.abs().sum()
+            if short_abs_sum != 0:
+                weights.loc[idx, shorts.index] = (shorts / short_abs_sum) * (target_leverage / 2.0)
+                
+    return weights.astype(float)
+
+class MultiTargetBenchmarkManager:
+    """Manages benchmark selection for multi-target strategies."""
+    
+    def __init__(self, target_etfs: List[str], feature_etfs: List[str] = None, 
+                 config: BenchmarkConfig = None):
+        self.target_etfs = target_etfs
+        self.feature_etfs = feature_etfs or []
+        self.all_etfs = list(set(target_etfs + self.feature_etfs))
+        self.config = config or BenchmarkConfig()
+    
+    def calculate_all_benchmarks(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+        """Calculate returns for all multi-target benchmarks."""
+        benchmark_returns = {}
+        
+        # 1. Equal-weight of target ETFs (The most common multi-target benchmark)
+        if self.config.include_equal_weight_targets:
+            common_targets = [t for t in self.target_etfs if t in data.columns]
+            if common_targets:
+                benchmark_returns['benchmark_equal_weight_targets'] = data[common_targets].reindex(dates).mean(axis=1).fillna(0)
+        
+        # 2. SPY Only benchmark
+        if self.config.include_spy_only and 'SPY' in data.columns:
+            benchmark_returns['benchmark_spy_only'] = data['SPY'].reindex(dates).fillna(0)
+            
+        # 3. VTI Market benchmark
+        if self.config.include_vti_market and 'VTI' in data.columns:
+            benchmark_returns['benchmark_vti_market'] = data['VTI'].reindex(dates).fillna(0)
+            
+        # 4. Zero Return benchmark (cash)
+        if self.config.include_zero_return:
+            benchmark_returns['benchmark_zero_return'] = pd.Series(0.0, index=dates)
+            
+        # 5. Risk Parity (Simple inverse-volatility weighting)
+        if self.config.include_risk_parity:
+            common_targets = [t for t in self.target_etfs if t in data.columns]
+            if len(common_targets) > 1:
+                try:
+                    # Calculate rolling volatility for each target
+                    vols = data[common_targets].rolling(window=self.config.volatility_window).std()
+                    # Inverse volatility
+                    inv_vols = 1.0 / vols
+                    # Normalize to sum to 1
+                    weights = inv_vols.div(inv_vols.sum(axis=1), axis=0)
+                    # Forward fill weights and align
+                    weights = weights.ffill().reindex(dates)
+                    target_returns = data[common_targets].reindex(dates)
+                    
+                    # Portfolio return = sum(w_i * r_i)
+                    rp_ret = (weights.shift(1) * target_returns).sum(axis=1).fillna(0)
+                    benchmark_returns['benchmark_risk_parity'] = rp_ret
+                except Exception as e:
+                    logger.warning(f"Failed to calculate risk parity benchmark: {e}")
+
+        # Filter benchmarks based on config (only if explicitly set)
+        if self.config.benchmark_types is not None:
+            benchmark_returns = {k: v for k, v in benchmark_returns.items() 
+                               if k.replace('benchmark_', '') in self.config.benchmark_types}
+        
+        return pd.DataFrame(benchmark_returns, index=dates)
 
 # --- Performance Metrics ---
 
