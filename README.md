@@ -192,11 +192,11 @@ quant_trading_simulator/
 ├── src/                    # Core production code (modular for extensions)
 │   ├── utils_simulate.py   # Utilities (expanded with xarray transformers)
 │   ├── single_target_simulator.py  # Basic SPY prediction simulator
-│   └── multi_target_simulator.py   # Advanced multi-asset simulator
+│   ├── multi_target_simulator.py   # Advanced multi-asset simulator
+│   └── multi_target_utils.py       # Helper functions for multi-target flow
 ├── notebooks/              # Interactive educational tutorials
 │   ├── 01_single_target_tutorial.ipynb    # Basics: Single-asset simulation
-│   ├── 02_multi_target_tutorial.ipynb     # Advanced: Multi-asset strategies
-│   └── 03_full_research_cycle.ipynb       # End-to-end project demo
+│   └── 02_multi_target_tutorial.ipynb     # Advanced: Multi-asset strategies
 ├── docs/                   # Documentation and guides
 │   ├── ERM3_2e_Data_Dictionary.md         # Blue Water Macro data schema
 │   └── README.md                          # This guide

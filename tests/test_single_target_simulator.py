@@ -258,7 +258,7 @@ class TestSimulationEngine:
         
         # Check output structure
         assert isinstance(result_df, pd.DataFrame)
-        assert isinstance(fit_list, list)
+        assert isinstance(fit_list, dict)
         
         # Check that predictions were generated
         if len(result_df) > 0:  # If we have enough data

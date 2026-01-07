@@ -122,7 +122,7 @@ if run_btn:
             st.json(metrics)
 
             st.subheader("Cumulative Return")
-            cum = (1 + regout['perf_ret'].dropna()).cumprod()
+            cum = np.exp(regout['perf_ret'].dropna().cumsum())
             st.line_chart(cum)
     except Exception as e:
         st.error(f"Error: {e}")

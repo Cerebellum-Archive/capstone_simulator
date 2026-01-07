@@ -227,11 +227,14 @@ def create_tear_sheet(regout_list, sweep_tags, config):
                     'returns': returns
                 })
                 
-                # Calculate performance metrics
-                annual_return = TRADING_DAYS_PER_YEAR * returns.mean()
-                annual_vol = np.sqrt(TRADING_DAYS_PER_YEAR) * returns.std()
-                sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
-                max_drawdown = (returns.cumsum() - returns.cumsum().expanding().max()).min()
+                # Calculate performance metrics using consistent utility function
+                from utils_simulate import calculate_performance_metrics
+                metrics = calculate_performance_metrics(returns, is_log_returns=True)
+                
+                annual_return = metrics['annualized_return']
+                annual_vol = metrics['volatility']
+                sharpe_ratio = metrics['sharpe_ratio']
+                max_drawdown = metrics['max_drawdown']
                 
                 # Find best strategy-appropriate benchmark
                 benchmark_cols = [col for col in regout_df.columns if col.startswith('benchmark_')]
@@ -876,6 +879,26 @@ def create_simple_comparison_plot(regout_list, sweep_tags, config):
     
     return filename
 
+def create_performance_tearsheet(in_sample_results, out_of_sample_results, strategy_hash, title=None):
+    """
+    Generate a side-by-side performance comparison for in-sample vs out-of-sample results.
+    As described in the README "Killer Feature" section.
+    """
+    print(f"📊 Generating performance tearsheet for strategy: {strategy_hash}")
+    
+    # Combine results for comparison
+    regout_list = [in_sample_results, out_of_sample_results]
+    sweep_tags = ['In-Sample (Historical)', 'Out-of-Sample (Future)']
+    
+    # Use existing professional tear sheet function
+    config = {
+        'run_timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+        'strategy_hash': strategy_hash,
+        'title': title or f"Strategy Robustness Analysis: {strategy_hash}"
+    }
+    
+    return create_professional_tear_sheet(regout_list, sweep_tags, config)
+
 def create_professional_tear_sheet(regout_list, sweep_tags, config_dict):
     """
     Create a professional PDF tear sheet for multi-target strategies.
@@ -971,7 +994,8 @@ def create_professional_tear_sheet(regout_list, sweep_tags, config_dict):
                 if 'portfolio_return' in regout.columns:
                     returns = regout['portfolio_return'].dropna()
                     if len(returns) > 0:
-                        cumulative = (1 + returns).cumprod()
+                        # Use log-consistent compounding
+                        cumulative = np.exp(returns.cumsum())
                         ax.plot(cumulative.index, cumulative.values, label=tag, linewidth=2)
             
             ax.set_title('Cumulative Returns Comparison')

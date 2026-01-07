@@ -914,6 +914,152 @@ def run_comprehensive_strategy_sweep(X, y_multi, target_etfs, config, benchmark_
     
     return regout_list, sweep_tags, stats_df
 
+def run_simulation(target_etfs, feature_etfs, model='ridge', model_params=None, 
+                   position_sizer='equal_weight', train_frequency='monthly', 
+                   window_size=400, window_type='expanding', start_date='2010-01-01', 
+                   end_date=None, **kwargs):
+    """
+    High-level wrapper for multi-target simulation, as used in tutorials and README.
+    """
+    # Handle aliases from README/tutorials
+    if model_params is None:
+        model_params = kwargs.get('params', {})
+    
+    if 'training_window_size' in kwargs:
+        window_size = kwargs['training_window_size']
+        
+    if model == 'ridge' or model == 'Ridge':
+        base_model = Ridge(**model_params)
+    elif model == 'rf' or model == 'RandomForestRegressor':
+        base_model = RandomForestRegressor(**model_params)
+    elif model == 'huber' or model == 'HuberRegressor':
+        base_model = HuberRegressor(**model_params)
+    elif model == 'elasticnet' or model == 'ElasticNet':
+        base_model = ElasticNet(**model_params)
+    else:
+        base_model = LinearRegression(**model_params)
+    
+    fit_obj = MultiOutputRegressor(base_model)
+    
+    # Set up position sizing
+    if position_sizer == 'equal_weight':
+        position_func = L_func_multi_target_equal_weight_long_only
+    elif position_sizer == 'confidence_weighted':
+        position_func = L_func_multi_target_confidence_weighted
+    elif position_sizer == 'long_short':
+        position_func = L_func_multi_target_long_short
+    else:
+        position_func = L_func_multi_target_equal_weight_long_only
+    
+    # Load data
+    all_etfs = list(set(target_etfs + feature_etfs))
+    X, y_multi = load_and_prepare_multi_target_data(
+        all_etfs, target_etfs, start_date=start_date, end_date=end_date
+    )
+    
+    # Run simulation
+    regout = Simulate_MultiTarget(
+        X, y_multi,
+        train_frequency=train_frequency,
+        window_size=window_size,
+        window_type=window_type,
+        fit_obj=fit_obj,
+        position_func=position_func,
+        tag=kwargs.get('tag', 'multi_target'),
+        **kwargs
+    )
+    
+    return regout
+
+def run_reconstructed_pipeline(pipeline_config, X_new, y_new):
+    """
+    Run a reconstructed pipeline from metadata on new data.
+    Enables true out-of-sample testing as described in the README.
+    """
+    # Extract config
+    model_name = pipeline_config.get('model_name', 'ridge')
+    model_params = pipeline_config.get('param_grid', {})
+    position_func_name = pipeline_config.get('position_func_name', 'L_func_multi_target_equal_weight_long_only')
+    train_frequency = pipeline_config.get('train_frequency', 'monthly')
+    window_size = pipeline_config.get('window_size', 400)
+    window_type = pipeline_config.get('window_type', 'expanding')
+    tag = pipeline_config.get('tag', 'reconstructed')
+    
+    # Reconstruct model
+    from sklearn.multioutput import MultiOutputRegressor
+    from sklearn.linear_model import Ridge, HuberRegressor, ElasticNet, LinearRegression
+    from sklearn.ensemble import RandomForestRegressor
+    
+    if 'Ridge' in str(model_name):
+        base_model = Ridge(**model_params)
+    elif 'RandomForest' in str(model_name):
+        base_model = RandomForestRegressor(**model_params)
+    elif 'Huber' in str(model_name):
+        base_model = HuberRegressor(**model_params)
+    elif 'ElasticNet' in str(model_name):
+        base_model = ElasticNet(**model_params)
+    else:
+        base_model = LinearRegression(**model_params)
+        
+    fit_obj = MultiOutputRegressor(base_model)
+    
+    # Reconstruct position function
+    if 'equal_weight_long_only' in position_func_name:
+        position_func = L_func_multi_target_equal_weight_long_only
+    elif 'confidence_weighted' in position_func_name:
+        position_func = L_func_multi_target_confidence_weighted
+    elif 'long_short' in position_func_name:
+        position_func = L_func_multi_target_long_short
+    elif 'equal_weight' in position_func_name:
+        position_func = L_func_multi_target_equal_weight
+    else:
+        position_func = L_func_multi_target_equal_weight_long_only
+        
+    # Run simulation on new data
+    results = Simulate_MultiTarget(
+        X_new, y_new,
+        train_frequency=train_frequency,
+        window_size=window_size,
+        window_type=window_type,
+        fit_obj=fit_obj,
+        position_func=position_func,
+        tag=f"{tag}_oos",
+        use_cache=False,  # Don't use cache for OOS testing
+        save_results=True
+    )
+    
+    return results
+
+def list_cached_simulations():
+    """
+    List all cached simulations with their metadata.
+    """
+    from multi_target_utils import list_yfinance_cache
+    # For now, just a placeholder that prints info. 
+    # In a full implementation, this would scan the cache directory for .zarr and .pkl files.
+    cache_dir = "cache"
+    if not os.path.exists(cache_dir):
+        return {}
+        
+    simulations = {}
+    for filename in os.listdir(cache_dir):
+        if filename.startswith("simulation_") and (filename.endswith(".zarr") or filename.endswith(".pkl")):
+            # Extract hash and tag
+            parts = filename.replace(".zarr", "").replace(".pkl", "").split("_")
+            if len(parts) >= 3:
+                sim_hash = parts[1]
+                tag = "_".join(parts[2:])
+                
+                # Load metadata
+                try:
+                    _, metadata = load_simulation_results(sim_hash, tag)
+                    if metadata:
+                        simulations[sim_hash] = metadata
+                except Exception:
+                    continue
+                    
+    return simulations
+
 def main():
     """
     Enhanced main demonstration with comprehensive results display
@@ -959,19 +1105,15 @@ def main():
             portfolio_returns = enhanced_results['portfolio_returns']
             risk_adjusted_returns = enhanced_results.get('risk_adjusted_returns', portfolio_returns)
             
-            # Calculate performance metrics
             def calculate_metrics(returns):
-                annual_return = returns.mean() * 252
-                annual_vol = returns.std() * np.sqrt(252)
-                sharpe = annual_return / annual_vol if annual_vol > 0 else 0
-                cumulative = (1 + returns).cumprod()
-                max_dd = ((cumulative / cumulative.expanding().max()) - 1).min()
+                # Use consistent utility for metrics
+                metrics = calculate_performance_metrics(returns, is_log_returns=True)
                 return {
-                    'Annual Return': f"{annual_return:.2%}",
-                    'Annual Volatility': f"{annual_vol:.2%}",
-                    'Sharpe Ratio': f"{sharpe:.3f}",
-                    'Max Drawdown': f"{max_dd:.2%}",
-                    'Total Return': f"{(cumulative.iloc[-1] - 1):.2%}",
+                    'Annual Return': f"{metrics['annualized_return']:.2%}",
+                    'Annual Volatility': f"{metrics['volatility']:.2%}",
+                    'Sharpe Ratio': f"{metrics['sharpe_ratio']:.3f}",
+                    'Max Drawdown': f"{metrics['max_drawdown']:.2%}",
+                    'Total Return': f"{metrics['total_return']:.2%}",
                     'Trading Days': len(returns)
                 }
             
@@ -1003,21 +1145,22 @@ def main():
                 aligned_standard = portfolio_returns
                 aligned_risk_adj = portfolio_returns.iloc[:0]  # Empty series
             
-            # 1. Cumulative Returns
+            # 1. Cumulative Returns (log-consistent)
             dates = aligned_standard.index
-            cum_standard = (1 + aligned_standard).cumprod()
+            cum_standard = np.exp(aligned_standard.cumsum())
             
             axes[0,0].plot(dates, cum_standard, label='Standard Portfolio', alpha=0.8, linewidth=2)
             
             if len(aligned_risk_adj) > 0:
-                cum_risk_adj = (1 + aligned_risk_adj).cumprod()
+                cum_risk_adj = np.exp(aligned_risk_adj.cumsum())
                 axes[0,0].plot(dates, cum_risk_adj, label='Risk-Adjusted Portfolio', alpha=0.8, linewidth=2)
             axes[0,0].set_title('Cumulative Returns')
-            axes[0,0].set_ylabel('Cumulative Return')
+            axes[0,0].set_ylabel('Portfolio Value (1.0 = Start)')
             axes[0,0].legend()
             axes[0,0].grid(True, alpha=0.3)
             
             # 2. Rolling Sharpe Ratio (60-day)
+            # Use standard approximation for rolling Sharpe
             rolling_sharpe_std = aligned_standard.rolling(30).mean() / aligned_standard.rolling(30).std() * np.sqrt(252)
             
             axes[0,1].plot(dates, rolling_sharpe_std, label='Standard', alpha=0.8)
@@ -1031,7 +1174,7 @@ def main():
             axes[0,1].legend()
             axes[0,1].grid(True, alpha=0.3)
             
-            # 3. Drawdown Analysis
+            # 3. Drawdown Analysis (on price level)
             running_max_std = cum_standard.expanding().max()
             drawdown_std = (cum_standard - running_max_std) / running_max_std
             

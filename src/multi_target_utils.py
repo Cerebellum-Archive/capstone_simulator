@@ -1287,7 +1287,7 @@ class MultiTargetBenchmarkManager:
 
 # --- Performance Metrics ---
 
-def calculate_performance_metrics(returns: pd.Series) -> Dict[str, float]:
+def calculate_performance_metrics(returns: pd.Series, is_log_returns: bool = True) -> Dict[str, float]:
     """
     Calculate comprehensive performance metrics for a return series.
     
@@ -1305,16 +1305,24 @@ def calculate_performance_metrics(returns: pd.Series) -> Dict[str, float]:
             'calmar_ratio': 0.0
         }
     
-    # Basic return metrics
-    total_return = (1 + returns).prod() - 1
-    annualized_return = (1 + returns).prod() ** (TRADING_DAYS_PER_YEAR / len(returns)) - 1
+    # Calculate metrics
+    if is_log_returns:
+        # For log returns: compounding is exp(sum(r))
+        total_return = np.exp(returns.sum()) - 1
+        annualized_return = np.exp(returns.mean() * TRADING_DAYS_PER_YEAR) - 1
+        cumulative = np.exp(returns.cumsum())
+    else:
+        # For simple returns: compounding is prod(1 + r)
+        total_return = (1 + returns).prod() - 1
+        annualized_return = (1 + returns).prod() ** (TRADING_DAYS_PER_YEAR / len(returns)) - 1
+        cumulative = (1 + returns).cumprod()
+
     volatility = returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR)
     
     # Risk-adjusted metrics
     sharpe_ratio = annualized_return / volatility if volatility > 0 else 0
     
-    # Drawdown analysis
-    cumulative = (1 + returns).cumprod()
+    # Drawdown analysis (always on price-level cumulative returns)
     running_max = cumulative.expanding().max()
     drawdown = (cumulative - running_max) / running_max
     max_drawdown = drawdown.min()

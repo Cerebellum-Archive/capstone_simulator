@@ -530,12 +530,13 @@ def plot_xarray_results(ds: xr.Dataset, variables: Optional[List[str]] = None,
     plt.show()
 
 
-def calculate_performance_metrics(returns: Union[pd.Series, xr.DataArray]) -> Dict[str, float]:
+def calculate_performance_metrics(returns: Union[pd.Series, xr.DataArray], is_log_returns: bool = True) -> Dict[str, float]:
     """
     Calculate standard quantitative finance performance metrics.
     
     Args:
         returns: Time series of strategy returns
+        is_log_returns: Whether returns are log returns (default: True)
         
     Returns:
         Dictionary of performance metrics
@@ -566,12 +567,21 @@ def calculate_performance_metrics(returns: Union[pd.Series, xr.DataArray]) -> Di
         }
     
     # Calculate metrics
-    annual_return = (1 + returns.mean()) ** 252 - 1
+    if is_log_returns:
+        # For log returns: compounding is exp(sum(r))
+        annual_return = np.exp(returns.mean() * 252) - 1
+        total_return = np.exp(returns.sum()) - 1
+        cumulative = np.exp(returns.cumsum())
+    else:
+        # For simple returns: compounding is prod(1 + r)
+        annual_return = (1 + returns.mean()) ** 252 - 1
+        total_return = (1 + returns).prod() - 1
+        cumulative = (1 + returns).cumprod()
+
     volatility = returns.std() * np.sqrt(252)
     sharpe_ratio = annual_return / volatility if volatility > 0 else float('nan')
     
-    # Calculate maximum drawdown
-    cumulative = (1 + returns).cumprod()
+    # Calculate maximum drawdown (always on price-level cumulative returns)
     running_max = cumulative.expanding().max()
     drawdown = (cumulative - running_max) / running_max
     max_drawdown = drawdown.min()
@@ -579,7 +589,7 @@ def calculate_performance_metrics(returns: Union[pd.Series, xr.DataArray]) -> Di
     calmar_ratio = annual_return / abs(max_drawdown) if max_drawdown != 0 else 0
     from scipy.stats import skew, kurtosis
     return {
-        'total_return': (1 + returns).prod() - 1,
+        'total_return': total_return,
         'annualized_return': annual_return,
         'volatility': volatility,
         'sharpe_ratio': sharpe_ratio,

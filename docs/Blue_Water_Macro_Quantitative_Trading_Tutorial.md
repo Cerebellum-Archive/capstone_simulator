@@ -311,14 +311,14 @@ strategy_corr = results_xr.portfolio_returns.to_dataframe().corr()
 # Risk-adjusted performance
 for strategy in strategy_names:
     returns = results_xr.portfolio_returns.sel(strategy=strategy)
-    metrics = calculate_performance_metrics(returns)
-    print(f"{strategy}: Sharpe {metrics['Sharpe Ratio']:.3f}")
+    metrics = calculate_performance_metrics(returns, is_log_returns=True)
+    print(f"{strategy}: Sharpe {metrics['sharpe_ratio']:.3f}")
 ```
 
 #### Drawdown Analysis
 ```python
-# Calculate maximum drawdown
-cumulative = (1 + returns).cumprod()
+# Calculate maximum drawdown (using log-consistent compounding)
+cumulative = np.exp(returns.cumsum())
 running_max = cumulative.expanding().max()
 drawdown = (cumulative - running_max) / running_max
 max_drawdown = drawdown.min()

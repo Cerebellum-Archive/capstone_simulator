@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import warnings
+from utils_simulate import calculate_performance_metrics
 warnings.filterwarnings('ignore')
 
 # Constants for annualization
@@ -60,15 +61,16 @@ def load_cached_results():
                     portfolio_returns = cached_data[return_col].dropna()
                     
                     if len(portfolio_returns) > 0:
-                        # Core performance metrics
-                        annual_return = TRADING_DAYS_PER_YEAR * portfolio_returns.mean()
-                        annual_vol = np.sqrt(TRADING_DAYS_PER_YEAR) * portfolio_returns.std()
-                        sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
-                        max_drawdown = (portfolio_returns.cumsum() - portfolio_returns.cumsum().expanding().max()).min()
+                        # Core performance metrics using consistent utility
+                        metrics = calculate_performance_metrics(portfolio_returns, is_log_returns=True)
+                        annual_return = metrics['annualized_return']
+                        annual_vol = metrics['volatility']
+                        sharpe_ratio = metrics['sharpe_ratio']
+                        max_drawdown = metrics['max_drawdown']
                         
                         # Enhanced metrics
                         win_rate = (portfolio_returns > 0).mean()
-                        cumulative_return = (1 + portfolio_returns).prod() - 1
+                        cumulative_return = metrics['total_return']
                         
                         strategy_result = {
                             'Strategy': strategy_name,

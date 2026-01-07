@@ -330,7 +330,10 @@ class BuyAndHoldBenchmark(SingleTargetBenchmarkCalculator):
     
     def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
         if self.target_etf in data.columns:
-            return data[self.target_etf].reindex(dates).fillna(0)
+            res = data[self.target_etf]
+            if isinstance(res, pd.DataFrame):
+                res = res.iloc[:, 0]
+            return res.reindex(dates).fillna(0)
         return pd.Series(0.0, index=dates)
     
     def get_description(self) -> str:
@@ -354,7 +357,10 @@ class MarketIndexBenchmark(SingleTargetBenchmarkCalculator):
     
     def calculate_returns(self, data: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.Series:
         if self.index_etf in data.columns:
-            return data[self.index_etf].reindex(dates).fillna(0)
+            res = data[self.index_etf]
+            if isinstance(res, pd.DataFrame):
+                res = res.iloc[:, 0]
+            return res.reindex(dates).fillna(0)
         logger.warning(f"ETF {self.index_etf} not found in data, using zeros")
         return pd.Series(0.0, index=dates)
     
@@ -477,7 +483,7 @@ class BinaryPositionSizer(PositionSizer):
         self.short_position = short_position
         self.long_position = long_position
     
-    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+    def calculate_position(self, predictions: pd.Series, **kwargs) -> pd.Series:
         conditions = [predictions <= 0, predictions > 0]
         positions = [self.short_position, self.long_position]
         return pd.Series(np.select(conditions, positions, default=np.nan), index=predictions.index)
@@ -493,7 +499,7 @@ class QuartilePositionSizer(PositionSizer):
         if len(self.positions) != 4:
             raise ValueError("QuartilePositionSizer requires exactly 4 position values")
     
-    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+    def calculate_position(self, predictions: pd.Series, **kwargs) -> pd.Series:
         # Convert predictions to normalized quantiles
         from scipy.stats import norm
         from sklearn.preprocessing import StandardScaler
@@ -521,7 +527,7 @@ class ProportionalPositionSizer(PositionSizer):
         self.max_position = max_position
         self.min_position = min_position
     
-    def calculate_position(self, predictions: pd.Series) -> pd.Series:
+    def calculate_position(self, predictions: pd.Series, **kwargs) -> pd.Series:
         # Normalize predictions to [0,1] range
         pred_min, pred_max = predictions.min(), predictions.max()
         if pred_max == pred_min:
@@ -571,7 +577,8 @@ def L_func_4(ds, params=[]):
 # --- Core Simulation Functions ---
 
 def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, target_etf='SPY', 
-                           feature_etfs=None, benchmark_manager=None, config=None, metadata_list=None):
+                           feature_etfs=None, benchmark_manager=None, config=None, 
+                           metadata_list=None, all_returns_data=None):
     """
     Enhanced simulation statistics with benchmarking for single-target strategies.
     Calculates and prints comprehensive simulation statistics including benchmark comparisons.
@@ -591,6 +598,15 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
     print('SIMULATION RANGE:', 'from', trange.start, 'to', trange.stop)
     logger.info(f"Calculating statistics for {len(regout_list)} strategies")
 
+    # Load data for benchmarks if not provided
+    if benchmark_manager and all_returns_data is None:
+        try:
+            all_etfs = [target_etf] + (feature_etfs or [])
+            start_date = config.get('start_date', '2010-01-01') if config else '2010-01-01'
+            _, _, all_returns_data = load_and_prepare_data(all_etfs, target_etf, start_date=start_date)
+        except Exception as e:
+            logger.error(f"Failed to load benchmark data: {e}")
+
     for n, testlabel in enumerate(sweep_tags):
         try:
             reg_out = regout_list[n].loc[trange, :]
@@ -599,16 +615,12 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                 logger.warning(f"No data for strategy {testlabel} in specified range")
                 continue
 
-            # --- Core Performance Metrics ---
-            mean_return = TRADING_DAYS_PER_YEAR * reg_out.perf_ret.mean()
-            volatility = np.sqrt(TRADING_DAYS_PER_YEAR) * reg_out.perf_ret.std()
-            sharpe_ratio = mean_return / volatility if volatility != 0 else np.nan
-            
-            # Maximum drawdown calculation
-            cumulative_returns = reg_out.perf_ret.cumsum()
-            running_max = cumulative_returns.expanding().max()
-            drawdown = cumulative_returns - running_max
-            max_drawdown = drawdown.min()
+            # --- Core Performance Metrics using consistent utility ---
+            metrics = calculate_performance_metrics(reg_out.perf_ret, is_log_returns=True)
+            mean_return = metrics['annualized_return']
+            volatility = metrics['volatility']
+            sharpe_ratio = metrics['sharpe_ratio']
+            max_drawdown = metrics['max_drawdown']
             
             df.loc['return', testlabel] = mean_return
             df.loc['stdev', testlabel] = volatility
@@ -711,22 +723,17 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
             df.loc['mae', testlabel] = mae(reg_out.prediction, reg_out.actual)
             df.loc['r2', testlabel] = r2_score(reg_out.actual, reg_out.prediction)
 
-            # Basic target benchmark (buy-and-hold target ETF)
-            target_return = TRADING_DAYS_PER_YEAR * reg_out.actual.mean()
-            target_volatility = np.sqrt(TRADING_DAYS_PER_YEAR) * reg_out.actual.std()
+            # Basic target benchmark (buy-and-hold target ETF) using consistent utility
+            target_metrics = calculate_performance_metrics(reg_out.actual, is_log_returns=True)
+            target_return = target_metrics['annualized_return']
+            target_volatility = target_metrics['volatility']
             df.loc['target_return', testlabel] = target_return
             df.loc['target_volatility', testlabel] = target_volatility
-            df.loc['target_sharpe', testlabel] = target_return / target_volatility if target_volatility != 0 else np.nan
+            df.loc['target_sharpe', testlabel] = target_metrics['sharpe_ratio']
             
-            # Enhanced benchmarking using multi-target approach
-            if benchmark_manager:
+            # Enhanced benchmarking
+            if benchmark_manager and all_returns_data is not None:
                 try:
-                    # Get all ETF returns for the period
-                    all_etfs = [target_etf] + (feature_etfs or [])
-                    start_date = config.get('start_date', '2010-01-01') if config else '2010-01-01'
-                    X, y, all_returns_df = load_and_prepare_data(all_etfs, target_etf, start_date=start_date)
-                    all_returns_data = pd.concat([X, y.to_frame(target_etf)], axis=1)
-                    
                     # Calculate benchmark returns for the simulation period
                     benchmark_returns_df = benchmark_manager.calculate_all_benchmarks(
                         all_returns_data, reg_out.index
@@ -737,7 +744,7 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                         reg_out = reg_out.copy()  # Avoid SettingWithCopyWarning
                         reg_out[benchmark_col] = benchmark_returns_df[benchmark_col]
                     
-                    # Enhanced benchmark analysis (using multi-target approach)
+                    # Enhanced benchmark analysis
                     benchmark_cols = [col for col in benchmark_returns_df.columns if col.startswith('benchmark_')]
                     if benchmark_cols:
                         best_info_ratio = -np.inf
@@ -781,9 +788,9 @@ def sim_stats_single_target(regout_list, sweep_tags, author='CG', trange=None, t
                     df.loc['best_info_ratio', testlabel] = np.nan
                     df.loc['best_excess_return', testlabel] = np.nan
 
-                df.loc['start_date', testlabel] = str(min(reg_out.prediction.index).date())
-                df.loc['end_date', testlabel] = str(max(reg_out.prediction.index).date())
-                df.loc['author', testlabel] = author
+            df.loc['start_date', testlabel] = str(min(reg_out.prediction.index).date())
+            df.loc['end_date', testlabel] = str(max(reg_out.prediction.index).date())
+            df.loc['author', testlabel] = author
             
             # Store enhanced results for plotting
             results[testlabel] = reg_out.copy()
@@ -890,7 +897,7 @@ def Simulate(X, y, window_size=400, window_type='expanding', pipe_steps={}, para
         regout.loc[prediction_date, 'prediction'] = prediction
 
     print(f"Simulation for {tag} complete.")
-    return regout.dropna(), []
+    return regout.dropna(), metadata
 
 
 def load_and_prepare_data(etf_list, target_etf, start_date=None):
@@ -960,7 +967,12 @@ def load_and_prepare_data(etf_list, target_etf, start_date=None):
     etf_log_returns_df = log_returns(close_df).dropna()
 
     # Set timezone and align timestamps
-    etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York').map(lambda x: x.replace(hour=16, minute=00)).tz_convert('UTC')
+    if etf_log_returns_df.index.tz is None:
+        etf_log_returns_df.index = etf_log_returns_df.index.tz_localize('America/New_York')
+    else:
+        etf_log_returns_df.index = etf_log_returns_df.index.tz_convert('America/New_York')
+    
+    etf_log_returns_df.index = etf_log_returns_df.index.map(lambda x: x.replace(hour=16, minute=00)).tz_convert('UTC')
     etf_log_returns_df.index.name = 'teo'
     
     # --- Correctly create features and targets for predicting next-day return ---
@@ -1139,7 +1151,8 @@ def main():
             feature_etfs=config["feature_etfs"],
             benchmark_manager=benchmark_manager,
             config=config,
-            metadata_list=metadata_list
+            metadata_list=metadata_list,
+            all_returns_data=_all_returns
         )
         
         print("\nPerformance Summary")
