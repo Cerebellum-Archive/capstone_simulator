@@ -77,27 +77,30 @@ try:
     from .utils_simulate import (
         simplify_teos, log_returns, generate_train_predict_calender,
         StatsModelsWrapper_with_OLS, get_complexity_score, 
-        calculate_complexity_adjusted_metrics
+        calculate_complexity_adjusted_metrics, calculate_performance_metrics
     )
 except ImportError:
     # Fallback for direct execution or testing
     from utils_simulate import (
         simplify_teos, log_returns, generate_train_predict_calender,
         StatsModelsWrapper_with_OLS, get_complexity_score, 
-        calculate_complexity_adjusted_metrics
+        calculate_complexity_adjusted_metrics, calculate_performance_metrics
     )
 
 # Professional plotting utilities
 try:
     from .plotting_utils import create_tear_sheet, create_simple_comparison_plot
 except ImportError:
-    # Fallback if plotting_utils is not available
-    def create_tear_sheet(*args, **kwargs):
-        print("Warning: Plotting utilities not available")
-        return None
-    def create_simple_comparison_plot(*args, **kwargs):
-        print("Warning: Plotting utilities not available")
-        return None
+    try:
+        from plotting_utils import create_tear_sheet, create_simple_comparison_plot
+    except ImportError:
+        # Fallback if plotting_utils is not available at all
+        def create_tear_sheet(*args, **kwargs):
+            print("Warning: Plotting utilities not available")
+            return None
+        def create_simple_comparison_plot(*args, **kwargs):
+            print("Warning: Plotting utilities not available")
+            return None
 
 
 # --- Enhanced Metadata and Caching System ---
